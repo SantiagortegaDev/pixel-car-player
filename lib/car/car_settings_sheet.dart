@@ -97,7 +97,7 @@ class _CarSettingsSheetState extends State<CarSettingsSheet> {
           ),
           const SizedBox(height: 4),
           Text(
-            _statusText(c.displayStatus),
+            c.demo ? 'Modo demo activo — datos simulados' : _statusText(c.displayStatus),
             style: const TextStyle(fontSize: 18, color: HarmonixColors.textSecondary),
           ),
           _Section('Conexión con el celular'),

@@ -45,7 +45,6 @@ class WavySlider extends StatefulWidget {
 class _WavySliderState extends State<WavySlider>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
-  bool _dragging = false;
   double? _dragValue;
 
   @override
@@ -75,8 +74,7 @@ class _WavySliderState extends State<WavySlider>
       slider: true,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onHorizontalDragStart: (_) => setState(() => _dragging = true),
-        onHorizontalDragUpdate: (details) {
+                onHorizontalDragUpdate: (details) {
           final box = context.findRenderObject() as RenderBox;
           final w = box.size.width;
           final newV = (_dragValue ?? _normalized) + details.delta.dx / w;
@@ -86,7 +84,6 @@ class _WavySliderState extends State<WavySlider>
           widget.onChanged(
               widget.min + _normalized * (widget.max - widget.min));
           setState(() {
-            _dragging = false;
             _dragValue = null;
           });
         },

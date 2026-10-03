@@ -32,7 +32,7 @@ datos aparte. La tableta solo muestra (estilo [Harmonix](https://github.com/Sant
 
 | Tableta | Celular |
 |---|---|
-| ![Tableta](docs/screenshots/car_player.png) | ![Celular](docs/screenshots/phone_main.png) |
+| ![Tableta](docs/screenshots/car_1280x720.png) | ![Celular](docs/screenshots/phone_main.png) |
 
 Selección de modo: `docs/screenshots/setup_tablet.png`, `docs/screenshots/setup_phone.png`.
 Más capturas de la tableta: `docs/screenshots/car_*.png`; del celular: `docs/screenshots/phone_*.png`.

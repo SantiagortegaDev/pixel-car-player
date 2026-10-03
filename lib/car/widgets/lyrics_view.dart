@@ -48,17 +48,20 @@ class LyricsPanel extends StatelessWidget {
     } else {
       child = LyricsUnavailable(key: ValueKey('na-${np.track?.id}'), track: np.track);
     }
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 450),
-        switchInCurve: Curves.easeOut,
-        layoutBuilder: (current, previous) => Stack(
-          alignment: fullscreen ? Alignment.center : Alignment.centerLeft,
-          children: [...previous, ?current],
+    return ScrollConfiguration(
+      behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 450),
+          switchInCurve: Curves.easeOut,
+          layoutBuilder: (current, previous) => Stack(
+            alignment: fullscreen ? Alignment.center : Alignment.centerLeft,
+            children: [...previous, ?current],
+          ),
+          child: child,
         ),
-        child: child,
       ),
     );
   }
@@ -192,8 +195,8 @@ class _SyncedLyricsViewState extends State<SyncedLyricsView> {
     final p = context.palette;
     final fs = widget.fullscreen;
     final active = widget.lyricIndex.value;
-    final activeSize = (fs ? 54.0 : 32.0) * s;
-    final idleSize = (fs ? 34.0 : 23.0) * s;
+    final activeSize = (fs ? 56.0 : 34.0) * s;
+    final idleSize = (fs ? 34.0 : 24.0) * s;
     final align = fs ? TextAlign.center : TextAlign.left;
 
     return LayoutBuilder(
@@ -274,9 +277,6 @@ class _SyncedLyricsViewState extends State<SyncedLyricsView> {
           fontWeight: isActive ? FontWeight.w800 : FontWeight.w600,
           height: 1.25,
           letterSpacing: isActive ? -0.4 : -0.1,
-          shadows: isActive
-              ? [Shadow(color: activeColor.withValues(alpha: 0.45), blurRadius: 24 * s)]
-              : const [],
         ),
         child: content,
       ),

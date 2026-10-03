@@ -79,6 +79,6 @@ class NativeBridge {
   Future<void> stopLocalMediaWatch() => _call('stopLocalMediaWatch');
   Future<bool> localMediaCommand(String action, {int? positionMs}) async =>
       await _call<bool>('localMediaCommand',
-          {'action': action, if (positionMs != null) 'positionMs': positionMs}) ??
+          {'action': action, 'positionMs': ?positionMs}) ??
       false;
 }
