@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:pixel_car_player/car/widgets/hx.dart';
@@ -20,6 +22,11 @@ class HxControls extends StatelessWidget {
     this.onShuffle,
     this.onRepeat,
     this.height = 56,
+    this.showShuffle = true,
+    this.showPrevious = true,
+    this.showPlay = true,
+    this.showNext = true,
+    this.showRepeat = true,
   });
 
   final bool playing;
@@ -31,70 +38,97 @@ class HxControls extends StatelessWidget {
   final VoidCallback? onShuffle;
   final VoidCallback? onRepeat;
   final double height;
+  final bool showShuffle, showPrevious, showPlay, showNext, showRepeat;
+
+  /// Ancho mínimo de la fila (en múltiplos del alto) con los botones visibles.
+  double get _units =>
+      (showShuffle ? 0.9 : 0) +
+      (showPrevious ? 1 : 0) +
+      (showPlay ? 1.2 : 0) +
+      (showNext ? 1 : 0) +
+      (showRepeat ? 0.9 : 0);
+
+  int get _count => [showShuffle, showPrevious, showPlay, showNext, showRepeat].where((v) => v).length;
+
+  /// Ancho máximo razonable de la fila para un alto [h] (el de play se estira hasta acá).
+  static double maxWidthFor(double h) => math.max(400, h * 7.2);
 
   @override
   Widget build(BuildContext context) {
-    final h = height;
-    return SizedBox(
-      height: h,
-      child: Row(
-        children: [
-          _MorphButton(
-            h: h,
-            width: h * 0.9,
-            kind: _Kind.tonal,
-            checked: shuffle,
-            icon: Symbols.shuffle_rounded,
-            label: 'Aleatorio',
-            onTap: onShuffle ?? () {},
-          ),
-          const SizedBox(width: 4),
-          _MorphButton(
-            h: h,
-            width: h,
-            kind: _Kind.tonal,
-            big: true,
-            icon: Symbols.skip_previous_rounded,
-            label: 'Anterior',
-            onTap: onPrevious,
-          ),
-          const SizedBox(width: 4),
-          Expanded(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(minWidth: h * 1.2),
-              child: _MorphButton(
-                h: h,
-                kind: _Kind.play,
-                checked: playing,
-                big: true,
-                icon: playing ? Symbols.pause_rounded : Symbols.play_arrow_rounded,
-                label: playing ? 'Pausar' : 'Reproducir',
-                onTap: onToggle,
+    if (_count == 0) return const SizedBox.shrink();
+    return LayoutBuilder(
+      builder: (context, c) {
+        // Si no caben al alto pedido (controles muy altos en una columna angosta), se achican.
+        final gaps = 4.0 * (_count - 1);
+        final fit = c.maxWidth.isFinite ? (c.maxWidth - gaps) / _units : height;
+        final h = math.max(32.0, math.min(height, fit));
+        final children = <Widget>[
+          if (showShuffle)
+            _MorphButton(
+              h: h,
+              width: h * 0.9,
+              kind: _Kind.tonal,
+              checked: shuffle,
+              icon: Symbols.shuffle_rounded,
+              label: 'Aleatorio',
+              onTap: onShuffle ?? () {},
+            ),
+          if (showPrevious)
+            _MorphButton(
+              h: h,
+              width: h,
+              kind: _Kind.tonal,
+              big: true,
+              icon: Symbols.skip_previous_rounded,
+              label: 'Anterior',
+              onTap: onPrevious,
+            ),
+          if (showPlay)
+            Expanded(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minWidth: h * 1.2),
+                child: _MorphButton(
+                  h: h,
+                  kind: _Kind.play,
+                  checked: playing,
+                  big: true,
+                  icon: playing ? Symbols.pause_rounded : Symbols.play_arrow_rounded,
+                  label: playing ? 'Pausar' : 'Reproducir',
+                  onTap: onToggle,
+                ),
               ),
             ),
+          if (showNext)
+            _MorphButton(
+              h: h,
+              width: h,
+              kind: _Kind.tonal,
+              big: true,
+              icon: Symbols.skip_next_rounded,
+              label: 'Siguiente',
+              onTap: onNext,
+            ),
+          if (showRepeat)
+            _MorphButton(
+              h: h,
+              width: h * 0.9,
+              kind: _Kind.tonal,
+              checked: repeat,
+              icon: Symbols.repeat_rounded,
+              label: 'Repetir',
+              onTap: onRepeat ?? () {},
+            ),
+        ];
+        return SizedBox(
+          height: h,
+          child: Row(
+            mainAxisSize: showPlay ? MainAxisSize.max : MainAxisSize.min,
+            children: [
+              for (var i = 0; i < children.length; i++) ...[if (i > 0) const SizedBox(width: 4), children[i]],
+            ],
           ),
-          const SizedBox(width: 4),
-          _MorphButton(
-            h: h,
-            width: h,
-            kind: _Kind.tonal,
-            big: true,
-            icon: Symbols.skip_next_rounded,
-            label: 'Siguiente',
-            onTap: onNext,
-          ),
-          const SizedBox(width: 4),
-          _MorphButton(
-            h: h,
-            width: h * 0.9,
-            kind: _Kind.tonal,
-            checked: repeat,
-            icon: Symbols.repeat_rounded,
-            label: 'Repetir',
-            onTap: onRepeat ?? () {},
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }

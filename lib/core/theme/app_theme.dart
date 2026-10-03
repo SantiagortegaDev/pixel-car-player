@@ -19,14 +19,22 @@ class AppTheme {
   static const String font = 'Google Sans Flex';
   static const String fontNum = 'Rubik';
 
-  /// Esquema Tonal Spot exacto (material_color_utilities) desde una semilla.
+  /// Esquema dinámico exacto (material_color_utilities) desde una semilla. Por defecto
+  /// Tonal Spot, como Android / Harmonix v2; [variant] elige otra variante de Material You.
   static ColorScheme schemeFromSeed(Color seed,
-      {Brightness brightness = Brightness.dark}) {
-    final s = mcu.SchemeTonalSpot(
-      sourceColorHct: mcu.Hct.fromInt(seed.toARGB32()),
-      isDark: brightness == Brightness.dark,
-      contrastLevel: 0,
-    );
+      {Brightness brightness = Brightness.dark,
+      SchemeVariant variant = SchemeVariant.tonalSpot}) {
+    final hct = mcu.Hct.fromInt(seed.toARGB32());
+    final dark = brightness == Brightness.dark;
+    final mcu.DynamicScheme s = switch (variant) {
+      SchemeVariant.tonalSpot => mcu.SchemeTonalSpot(sourceColorHct: hct, isDark: dark, contrastLevel: 0),
+      SchemeVariant.vibrant => mcu.SchemeVibrant(sourceColorHct: hct, isDark: dark, contrastLevel: 0),
+      SchemeVariant.expressive => mcu.SchemeExpressive(sourceColorHct: hct, isDark: dark, contrastLevel: 0),
+      SchemeVariant.fidelity => mcu.SchemeFidelity(sourceColorHct: hct, isDark: dark, contrastLevel: 0),
+      SchemeVariant.neutral => mcu.SchemeNeutral(sourceColorHct: hct, isDark: dark, contrastLevel: 0),
+      SchemeVariant.content => mcu.SchemeContent(sourceColorHct: hct, isDark: dark, contrastLevel: 0),
+      SchemeVariant.monochrome => mcu.SchemeMonochrome(sourceColorHct: hct, isDark: dark, contrastLevel: 0),
+    };
     Color c(int argb) => Color(argb);
     return ColorScheme(
       brightness: brightness,
@@ -228,6 +236,9 @@ class AppTheme {
 
   static ThemeData dark([ColorScheme? s]) => build(s ?? schemeFromSeed(fallbackSeed));
 }
+
+/// Variantes de esquema de Material You (Harmonix v2 `lib/theme.js` → `VARIANTS`).
+enum SchemeVariant { tonalSpot, vibrant, expressive, fidelity, neutral, content, monochrome }
 
 /// Redondeos de Caelestia / MD3 (`--r-*`).
 class HxRadius {

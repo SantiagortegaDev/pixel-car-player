@@ -78,10 +78,18 @@ class CarLinkClient {
     this.btAddress,
     this.btName,
     this.watchdog = const Duration(seconds: 25),
+    this.useWifi = true,
+    this.maxBackoff = const Duration(seconds: 10),
   }) : _bridge = bridge ?? NativeBridge.instance;
 
   final NativeBridge _bridge;
   final Duration watchdog;
+
+  /// `false` = solo Bluetooth (no se intentan beacons, gateway ni IP manual).
+  bool useWifi;
+
+  /// Espera máxima entre intentos fallidos (el backoff arranca en 1 s).
+  Duration maxBackoff;
 
   String? manualIp;
   String? btAddress;
@@ -138,10 +146,18 @@ class CarLinkClient {
   }
 
   /// Cambia la configuración y fuerza un nuevo intento de conexión.
-  void configure({String? manualIp, String? btAddress, String? btName}) {
+  void configure({
+    String? manualIp,
+    String? btAddress,
+    String? btName,
+    bool? useWifi,
+    Duration? maxBackoff,
+  }) {
     this.manualIp = manualIp;
     this.btAddress = btAddress;
     this.btName = btName;
+    if (useWifi != null) this.useWifi = useWifi;
+    if (maxBackoff != null) this.maxBackoff = maxBackoff;
     reconnect();
   }
 
@@ -184,7 +200,7 @@ class CarLinkClient {
         if (m is! BeaconMessage) return;
         final isNew = !_beacons.containsKey(hit.address);
         _beacons[hit.address] = _Beacon(m.port, m.device, DateTime.now());
-        if (isNew && !status.value.isConnected) _wakeUp();
+        if (isNew && useWifi && !status.value.isConnected) _wakeUp();
       },
       onDone: () {
         // No se pudo enlazar (o se cerró): reintentar más tarde.
@@ -208,7 +224,9 @@ class CarLinkClient {
       }
       if (conn == null) {
         await _sleep(backoff);
-        backoff = Duration(milliseconds: math.min(backoff.inMilliseconds * 2, 10000));
+        backoff = Duration(
+            milliseconds: math.min(
+                backoff.inMilliseconds * 2, math.max(1000, maxBackoff.inMilliseconds)));
         continue;
       }
       backoff = const Duration(seconds: 1);
@@ -226,7 +244,7 @@ class CarLinkClient {
     for (final e in _beacons.entries) {
       targets[e.key] = e.value.port;
     }
-    final gw = await _bridge.getGatewayIp();
+    final gw = useWifi ? await _bridge.getGatewayIp() : null;
     if (gw != null && gw.isNotEmpty && gw != '0.0.0.0') {
       targets.putIfAbsent(gw, () => LinkProtocol.tcpPort);
     }
@@ -242,7 +260,7 @@ class CarLinkClient {
     }
 
     final attempts = <Future<LinkConnection?>>[
-      if (socketsSupported)
+      if (socketsSupported && useWifi)
         for (final t in targets.entries) connectTcp(t.key, t.value),
       if (btAddress != null && btAddress!.isNotEmpty && _bridge.isSupported)
         _connectRfcomm(btAddress!),

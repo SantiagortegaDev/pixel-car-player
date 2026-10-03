@@ -131,8 +131,9 @@ void main() {
   group('esquema Material You desde la carátula', () {
     final art1 = Uint8List.fromList([1, 2, 3]);
     final art2 = Uint8List.fromList([4, 5, 6, 7]);
-    final red = AppTheme.schemeFromSeed(const Color(0xFFD02030));
-    final green = AppTheme.schemeFromSeed(const Color(0xFF20B040));
+    const redSeed = Color(0xFFD02030), greenSeed = Color(0xFF20B040);
+    final red = AppTheme.schemeFromSeed(redSeed);
+    final green = AppTheme.schemeFromSeed(greenSeed);
 
     test('sin carátula usa el esquema semilla, oscuro', () {
       final c = CarController();
@@ -145,9 +146,9 @@ void main() {
       var calls = 0;
       final c = CarController(
         demo: true,
-        schemeBuilder: (b) async {
+        seedBuilder: (b) async {
           calls++;
-          return b.length == 3 ? red : green;
+          return b.length == 3 ? redSeed : greenSeed;
         },
       );
       c.apply(const TrackMessage(_track));
@@ -171,7 +172,7 @@ void main() {
     });
 
     test('un error al generar conserva el esquema actual', () async {
-      final c = CarController(demo: true, schemeBuilder: (_) async => throw StateError('x'));
+      final c = CarController(demo: true, seedBuilder: (_) async => throw StateError('x'));
       c.apply(const TrackMessage(_track));
       c.apply(ArtMessage(id: 't1', mime: 'image/png', bytes: art1));
       await pumpEventQueue();

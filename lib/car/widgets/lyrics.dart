@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:material_symbols_icons/symbols.dart';
+import 'package:pixel_car_player/car/custom/car_custom_scope.dart';
+import 'package:pixel_car_player/car/custom/car_customization.dart';
 import 'package:pixel_car_player/car/widgets/hx.dart';
 import 'package:pixel_car_player/car/widgets/loading_indicator.dart';
 import 'package:pixel_car_player/core/models/now_playing.dart';
@@ -21,6 +23,9 @@ class HxLyrics extends StatelessWidget {
     required this.onSeek,
     this.fontSize = 19,
     this.gap = 8,
+    this.align = CarLyricsAlign.left,
+    this.glow = true,
+    this.seek = CarSeekMode.tap,
   });
 
   final NowPlaying np;
@@ -28,6 +33,13 @@ class HxLyrics extends StatelessWidget {
   final ValueChanged<Duration> onSeek;
   final double fontSize;
   final double gap;
+  final CarLyricsAlign align;
+
+  /// Brillo de la línea actual.
+  final bool glow;
+
+  /// Cómo se salta a una línea al tocarla.
+  final CarSeekMode seek;
 
   @override
   Widget build(BuildContext context) {
@@ -35,12 +47,26 @@ class HxLyrics extends StatelessWidget {
     final ok = np.lyricsStatus == LyricsStatus.ok && np.lyrics.isNotEmpty;
     final String status;
     final Widget view;
+    final textAlign = align == CarLyricsAlign.center ? TextAlign.center : TextAlign.start;
     if (ok && np.lyricsSynced) {
       status = 'synced';
-      view = _LyricList(lines: np.lyrics, lyricIndex: lyricIndex, onSeek: onSeek, fontSize: fontSize, gap: gap);
+      view = _LyricList(
+        lines: np.lyrics,
+        lyricIndex: lyricIndex,
+        onSeek: onSeek,
+        fontSize: fontSize,
+        gap: gap,
+        textAlign: textAlign,
+        glow: glow,
+        seek: seek,
+      );
     } else if (ok) {
       status = 'plain';
-      view = _Plain(text: np.lyrics.map((l) => l.text).join('\n'), fontSize: math.max(18, fontSize - 1));
+      view = _Plain(
+        text: np.lyrics.map((l) => l.text).join('\n'),
+        fontSize: math.max(18, fontSize - 1),
+        textAlign: textAlign,
+      );
     } else if (np.lyricsStatus == LyricsStatus.loading) {
       status = 'loading';
       view = const Center(child: HxLoadingIndicator(size: 56, label: 'Buscando la letra'));
@@ -62,6 +88,7 @@ class _None extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = context.cs;
+    final text = CarCustomScope.of(context).text(CarText.noLyrics);
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -69,15 +96,17 @@ class _None extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             HxIcon(Symbols.lyrics_rounded, size: 64, color: cs.outline),
-            const SizedBox(height: 8),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 260),
-              child: Text(
-                'No hay letra para este tema.',
-                textAlign: TextAlign.center,
-                style: context.tt.titleMedium?.copyWith(color: cs.outline),
+            if (text.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 260),
+                child: Text(
+                  text,
+                  textAlign: TextAlign.center,
+                  style: context.tt.titleMedium?.copyWith(color: cs.outline),
+                ),
               ),
-            ),
+            ],
           ],
         ),
       ),
@@ -86,9 +115,10 @@ class _None extends StatelessWidget {
 }
 
 class _Plain extends StatelessWidget {
-  const _Plain({required this.text, required this.fontSize});
+  const _Plain({required this.text, required this.fontSize, required this.textAlign});
   final String text;
   final double fontSize;
+  final TextAlign textAlign;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
@@ -102,9 +132,13 @@ class _Plain extends StatelessWidget {
       ).createShader(r),
       child: SingleChildScrollView(
         padding: EdgeInsets.fromLTRB(16, 16, 16, c.maxWidth * 0.4),
-        child: Text(
-          text,
-          style: context.tt.bodyLarge?.copyWith(fontSize: fontSize, color: context.cs.onSurfaceVariant),
+        child: SizedBox(
+          width: double.infinity,
+          child: Text(
+            text,
+            textAlign: textAlign,
+            style: context.tt.bodyLarge?.copyWith(fontSize: fontSize, color: context.cs.onSurfaceVariant),
+          ),
         ),
       ),
     ),
@@ -125,6 +159,9 @@ class _LyricList extends StatefulWidget {
     required this.onSeek,
     required this.fontSize,
     required this.gap,
+    required this.textAlign,
+    required this.glow,
+    required this.seek,
   });
 
   final List<LyricLine> lines;
@@ -132,6 +169,9 @@ class _LyricList extends StatefulWidget {
   final ValueChanged<Duration> onSeek;
   final double fontSize;
   final double gap;
+  final TextAlign textAlign;
+  final bool glow;
+  final CarSeekMode seek;
 
   @override
   State<_LyricList> createState() => _LyricListState();
@@ -216,7 +256,7 @@ class _LyricListState extends State<_LyricList> {
     );
     final current = base.copyWith(
       color: cs.primary,
-      shadows: [Shadow(color: cs.primary.withValues(alpha: 0.5), blurRadius: 14)],
+      shadows: [Shadow(color: cs.primary.withValues(alpha: widget.glow ? 0.5 : 0), blurRadius: 14)],
     );
     return LayoutBuilder(
       builder: (context, c) {
@@ -245,13 +285,17 @@ class _LyricListState extends State<_LyricList> {
                       padding: EdgeInsets.only(bottom: i == widget.lines.length - 1 ? 0 : widget.gap),
                       child: GestureDetector(
                         behavior: HitTestBehavior.opaque,
-                        onTap: () => widget.onSeek(widget.lines[i].time),
+                        onTap: widget.seek == CarSeekMode.tap ? () => widget.onSeek(widget.lines[i].time) : null,
+                        onDoubleTap: widget.seek == CarSeekMode.doubleTap
+                            ? () => widget.onSeek(widget.lines[i].time)
+                            : null,
                         child: Padding(
                           padding: const EdgeInsets.symmetric(vertical: 4),
                           child: AnimatedDefaultTextStyle(
                             duration: HxMotion.dFxSlow,
                             curve: HxMotion.fxSlow,
                             style: i == _active ? current : idle,
+                            textAlign: widget.textAlign,
                             child: Text(widget.lines[i].isGap ? '. . .' : widget.lines[i].text),
                           ),
                         ),

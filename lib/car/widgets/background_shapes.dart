@@ -16,6 +16,8 @@ class BackgroundShapes extends StatefulWidget {
     this.minSize = 56,
     this.maxSize = 220,
     this.seed,
+    this.opacity = 1,
+    this.animate = true,
   });
 
   final bool playing;
@@ -23,6 +25,12 @@ class BackgroundShapes extends StatefulWidget {
   final double minSize;
   final double maxSize;
   final int? seed;
+
+  /// Multiplicador de la opacidad de Harmonix (1 = de fábrica).
+  final double opacity;
+
+  /// `false` = quietas aunque suene la música.
+  final bool animate;
 
   static const pool = [
     'circle',
@@ -69,7 +77,7 @@ class _Shape {
 
 class _BackgroundShapesState extends State<BackgroundShapes> with SingleTickerProviderStateMixin {
   late final math.Random _rnd = math.Random(widget.seed);
-  late final List<_Shape> _shapes = _make();
+  late List<_Shape> _shapes = _make();
   late final Ticker _ticker = createTicker(_tick);
   final _repaint = ValueNotifier<int>(0);
   Duration _last = Duration.zero;
@@ -79,6 +87,7 @@ class _BackgroundShapesState extends State<BackgroundShapes> with SingleTickerPr
   double _signed(double a, double b) => _rand(a, b) * (_rnd.nextBool() ? -1 : 1);
 
   List<_Shape> _make() => List.generate(widget.count, (i) {
+    // Tamaños repartidos entre min y max como en Harmonix (con 14 formas).
     final colour = _rnd.nextInt(4);
     return _Shape(
       size: widget.minSize + i / widget.count * (widget.maxSize - widget.minSize),
@@ -102,11 +111,15 @@ class _BackgroundShapesState extends State<BackgroundShapes> with SingleTickerPr
   @override
   void didUpdateWidget(BackgroundShapes old) {
     super.didUpdateWidget(old);
+    if (old.count != widget.count || old.minSize != widget.minSize || old.maxSize != widget.maxSize) {
+      _shapes = _make();
+      _repaint.value++;
+    }
     _sync();
   }
 
   void _sync() {
-    final run = widget.playing && !_reducedMotion;
+    final run = widget.playing && widget.animate && widget.count > 0 && !_reducedMotion;
     if (run && !_ticker.isActive) {
       _last = Duration.zero;
       _ticker.start();
@@ -155,6 +168,7 @@ class _BackgroundShapesState extends State<BackgroundShapes> with SingleTickerPr
     final dark = cs.brightness == Brightness.dark;
     final colors = [cs.primaryContainer, cs.secondaryContainer, cs.tertiaryContainer, cs.outlineVariant];
     final op = dark ? BackgroundShapes.darkOpacity : BackgroundShapes.lightOpacity;
+    final k = widget.opacity;
     return IgnorePointer(
       child: RepaintBoundary(
         child: LayoutBuilder(
@@ -164,7 +178,9 @@ class _BackgroundShapesState extends State<BackgroundShapes> with SingleTickerPr
               size: c.biggest,
               painter: _ShapesPainter(
                 shapes: _shapes,
-                colors: [for (var i = 0; i < 4; i++) colors[i].withValues(alpha: colors[i].a * op[i])],
+                colors: [
+                  for (var i = 0; i < 4; i++) colors[i].withValues(alpha: (colors[i].a * op[i] * k).clamp(0.0, 1.0)),
+                ],
                 repaint: _repaint,
               ),
             );
@@ -194,5 +210,5 @@ class _ShapesPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_ShapesPainter old) => !listEquals(old.colors, colors);
+  bool shouldRepaint(_ShapesPainter old) => !listEquals(old.colors, colors) || !identical(old.shapes, shapes);
 }

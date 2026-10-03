@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:pixel_car_player/car/custom/car_custom_scope.dart';
+import 'package:pixel_car_player/car/custom/car_customization.dart';
 import 'package:pixel_car_player/car/widgets/hx.dart';
 import 'package:pixel_car_player/core/shapes/m3_shapes.dart';
 import 'package:pixel_car_player/data/link/link_protocol.dart';
@@ -16,11 +18,13 @@ class HxQueueList extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = context.cs;
     if (items.isEmpty) {
+      final text = CarCustomScope.of(context).text(CarText.emptyQueue);
+      if (text.isEmpty) return const SizedBox.shrink();
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Text(
-            'No hay más temas en la cola.',
+            text,
             textAlign: TextAlign.center,
             style: context.tt.bodyLarge?.copyWith(color: cs.onSurfaceVariant),
           ),

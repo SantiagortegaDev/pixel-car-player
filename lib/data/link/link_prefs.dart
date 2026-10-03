@@ -26,6 +26,11 @@ class CarPrefs {
   static const _kScreen = 'car_keep_screen_on';
   static const kDemo = 'demo_mode'; // compartido con AppConfig
 
+  /// Inicio automático (los lee el BootReceiver nativo; ver CONTRACT.md §2).
+  /// Los escribe `CarCustomizationStore` junto con el resto de la personalización.
+  static const kAutostart = 'car_autostart';
+  static const kAutostartDelay = 'car_autostart_delay';
+
   static Future<CarPrefs> load() async {
     try {
       final p = await SharedPreferences.getInstance();

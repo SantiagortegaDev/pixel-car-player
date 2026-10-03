@@ -3,24 +3,39 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:pixel_car_player/car/custom/car_customization.dart';
 import 'package:pixel_car_player/car/widgets/hx.dart';
 import 'package:pixel_car_player/core/shapes/m3_shapes.dart';
 
 /// CoverVisualiser de Caelestia / Harmonix v2 (`Disc.svelte`): la portada recortada con
-/// la forma MD3 Cookie9Sided, que gira (solo la máscara; 23,5 s por vuelta) mientras
-/// suena, y 44 barras tipo píldora que nacen del borde de la forma + 12 px.
+/// una forma MD3 (Cookie9Sided por defecto), que gira (solo la máscara; 23,5 s por vuelta)
+/// mientras suena, y 44 barras tipo píldora que nacen del borde de la forma + 12 px.
 ///
 /// La tableta no tiene el audio (sale por el Bluetooth del radio), así que las barras se
 /// alimentan con un pseudo-espectro procedural: graves arriba, agudos abajo, reflejado
 /// izquierda/derecha, con el mismo suavizado de Harmonix (ataque 0,35 · caída 0,12).
 /// En pausa bajan hasta quedar como puntos.
+///
+/// Todo es configurable desde Configuración → Portada y visualizador ([cover], [viz]).
 class Disc extends StatefulWidget {
-  const Disc({super.key, required this.artwork, required this.size, required this.playing, this.seed});
+  const Disc({
+    super.key,
+    required this.artwork,
+    required this.size,
+    required this.playing,
+    this.seed,
+    this.cover = const CarCoverOpts(),
+    this.viz = const CarVisualizerOpts(),
+    this.showBars = true,
+  });
 
   final Uint8List? artwork;
   final double size;
   final bool playing;
   final int? seed;
+  final CarCoverOpts cover;
+  final CarVisualizerOpts viz;
+  final bool showBars;
 
   static const bars = 44;
   static const spacing = 12.0;
@@ -30,18 +45,44 @@ class Disc extends StatefulWidget {
   State<Disc> createState() => _DiscState();
 }
 
-class _DiscState extends State<Disc> with SingleTickerProviderStateMixin {
-  static final M3Shape _shape = M3Shape.cookie9;
+/// Geometría del disco para un tamaño y unas opciones: radio de la portada, grosor y
+/// largo máximo de las barras. Si las barras amplificadas no caben, la portada se achica
+/// (hasta un mínimo) y las barras pueden salir un poco del cuadro.
+@visibleForTesting
+class DiscGeometry {
+  DiscGeometry._(this.coverR, this.stroke, this.magnitude, this.spacing);
+  final double coverR, stroke, magnitude, spacing;
 
+  factory DiscGeometry.of(double s, CarVisualizerOpts v, {bool bars = true}) {
+    final spacing = v.spacing;
+    if (!bars) return DiscGeometry._((s * 0.84 / 2).roundToDouble(), 0, 0, spacing);
+    double strokeFor(double r) =>
+        math.min(10.0, math.max(4.0, 2 * math.pi * (r + spacing) / v.bars * 0.36)) * v.thickness;
+    final baseR = (s * 0.62).roundToDouble() / 2;
+    final baseStroke = strokeFor(baseR);
+    // Largo de Harmonix con los valores de fábrica.
+    final baseMag = math.max(0.0, math.min((s - baseR * 2) / 2 - Disc.spacing - baseStroke, s * 0.11));
+    final want = baseMag * v.amplification;
+    final outer = s / 2 + (v.amplification > 1 ? s * 0.06 : 0);
+    var r = math.min(baseR, outer - spacing - baseStroke - want);
+    r = math.max(r, s * 0.2);
+    final stroke = strokeFor(r);
+    final mag = math.max(0.0, math.min(want, outer - r - spacing - stroke));
+    return DiscGeometry._(r == baseR ? baseR : r.roundToDouble(), stroke, mag, spacing);
+  }
+}
+
+class _DiscState extends State<Disc> with SingleTickerProviderStateMixin {
   late final Ticker _ticker = createTicker(_tick);
   final _frame = ValueNotifier<int>(0);
-  final Float32List _levels = Float32List(Disc.bars);
+  late Float32List _levels = Float32List(widget.viz.bars);
   double _rotation = 0; // grados
   Duration _last = Duration.zero;
-  late final _Spectrum _spectrum = _Spectrum(Disc.bars ~/ 2, math.Random(widget.seed));
+  late final math.Random _rnd = math.Random(widget.seed);
+  late _Spectrum _spectrum = _Spectrum(widget.viz.bars ~/ 2, _rnd);
 
   bool get _reduced => WidgetsBinding.instance.platformDispatcher.accessibilityFeatures.disableAnimations;
-  bool get _animating => widget.playing && !_reduced;
+  bool get _animating => widget.playing && !_reduced && (widget.cover.rotate || widget.showBars);
 
   @override
   void initState() {
@@ -52,7 +93,17 @@ class _DiscState extends State<Disc> with SingleTickerProviderStateMixin {
   @override
   void didUpdateWidget(Disc old) {
     super.didUpdateWidget(old);
-    if (old.playing != widget.playing) _wake();
+    if (old.viz.bars != widget.viz.bars) {
+      final next = Float32List(widget.viz.bars);
+      for (var i = 0; i < next.length; i++) {
+        next[i] = _levels.isEmpty ? 0 : _levels[(i * _levels.length / next.length).floor()];
+      }
+      _levels = next;
+      _spectrum = _Spectrum(widget.viz.bars ~/ 2, _rnd);
+    }
+    if (old.playing != widget.playing || old.cover.rotate != widget.cover.rotate || old.showBars != widget.showBars) {
+      _wake();
+    }
   }
 
   void _wake() {
@@ -66,16 +117,20 @@ class _DiscState extends State<Disc> with SingleTickerProviderStateMixin {
     final dt = _last == Duration.zero ? 1 / 60 : math.min(0.1, (now - _last).inMicroseconds / 1e6);
     _last = now;
     final playing = _animating;
-    if (playing) _rotation = (_rotation - dt * 360000 / Disc.turnMs) % 360;
-    if (playing) _spectrum.advance(dt);
+    if (playing && widget.cover.rotate) {
+      _rotation = (_rotation - dt * 360 / widget.cover.turnSeconds) % 360;
+    }
+    final speed = widget.viz.speed;
+    if (playing) _spectrum.advance(dt * speed);
 
     var active = false;
-    const half = Disc.bars ~/ 2;
-    // El suavizado de Harmonix es por cuadro (≈60 fps); se corrige por dt.
-    final f = dt * 60;
-    for (var i = 0; i < Disc.bars; i++) {
-      final k = i < half ? i : Disc.bars - 1 - i;
-      final target = playing ? _spectrum.target(k) : 0.0;
+    final bars = _levels.length;
+    final half = bars ~/ 2;
+    // El suavizado de Harmonix es por cuadro (≈60 fps); se corrige por dt y velocidad.
+    final f = dt * 60 * math.sqrt(speed);
+    for (var i = 0; i < bars; i++) {
+      final k = i < half ? i : bars - 1 - i;
+      final target = playing && widget.showBars ? _spectrum.target(k) : 0.0;
       final a = target > _levels[i] ? 0.35 : 0.12;
       _levels[i] += (target - _levels[i]) * (1 - math.pow(1 - a, f));
       if (_levels[i] > 0.004) active = true;
@@ -92,25 +147,40 @@ class _DiscState extends State<Disc> with SingleTickerProviderStateMixin {
     super.dispose();
   }
 
+  Color _barColor(ColorScheme cs) => switch (widget.viz.color) {
+    CarVizColor.primary => cs.primary,
+    CarVizColor.secondary => cs.secondary,
+    CarVizColor.tertiary => cs.tertiary,
+    CarVizColor.onSurface => cs.onSurface,
+  };
+
   @override
   Widget build(BuildContext context) {
     final cs = context.cs;
     final size = widget.size;
-    final coverSize = (size * 0.62).roundToDouble();
+    final shape = M3Shape.all[widget.cover.shape] ?? M3Shape.cookie9;
+    final geo = DiscGeometry.of(size, widget.viz, bars: widget.showBars);
+    final coverSize = geo.coverR * 2;
     return RepaintBoundary(
       child: SizedBox.square(
         dimension: size,
         child: Stack(
           alignment: Alignment.center,
+          clipBehavior: Clip.none,
           children: [
             Positioned.fill(
               child: CustomPaint(
                 painter: _BarsPainter(
-                  levels: _levels,
-                  coverR: coverSize / 2,
+                  levels: () => _levels,
+                  geo: geo,
+                  shape: shape,
                   rotation: () => _rotation,
-                  color: cs.primary,
-                  glow: cs.outline.withValues(alpha: 0.45),
+                  color: _barColor(cs),
+                  outline: widget.cover.outline ? cs.outline.withValues(alpha: 0.45) : null,
+                  glow: widget.cover.glow ? cs.primary.withValues(alpha: 0.55) : null,
+                  bars: widget.showBars,
+                  roundCaps: widget.viz.roundCaps,
+                  pausedDots: widget.viz.pausedDots,
                   repaint: _frame,
                 ),
               ),
@@ -118,7 +188,7 @@ class _DiscState extends State<Disc> with SingleTickerProviderStateMixin {
             SizedBox.square(
               dimension: coverSize,
               child: ClipPath(
-                clipper: _RotatingClip(_shape, () => _rotation, _frame),
+                clipper: _RotatingClip(shape, () => _rotation, _frame),
                 child: HxCover(bytes: widget.artwork, iconSize: coverSize * 0.3),
               ),
             ),
@@ -144,61 +214,95 @@ class _RotatingClip extends CustomClipper<Path> {
 class _BarsPainter extends CustomPainter {
   _BarsPainter({
     required this.levels,
-    required this.coverR,
+    required this.geo,
+    required this.shape,
     required this.rotation,
     required this.color,
+    required this.outline,
     required this.glow,
+    required this.bars,
+    required this.roundCaps,
+    required this.pausedDots,
     required Listenable repaint,
   }) : super(repaint: repaint);
 
-  final Float32List levels;
-  final double coverR;
+  final Float32List Function() levels;
+  final DiscGeometry geo;
+  final M3Shape shape;
   final double Function() rotation;
   final Color color;
-  final Color glow;
+  final Color? outline;
+  final Color? glow;
+  final bool bars;
+  final bool roundCaps;
+  final bool pausedDots;
 
   @override
   void paint(Canvas canvas, Size size) {
     final s = size.width;
     final c = s / 2;
-    const bars = Disc.bars;
-    const spacing = Disc.spacing;
-    final coverSize = coverR * 2;
-    // Grosor proporcional al perímetro: barras tipo píldora, como en Caelestia.
-    final stroke = math.min(10.0, math.max(4.0, 2 * math.pi * (coverR + spacing) / bars * 0.36));
-    final maxMagnitude = math.min((s - coverSize) / 2 - spacing - stroke, s * 0.11);
+    final coverR = geo.coverR;
     final rotRad = rotation() * math.pi / 180;
-
-    // Un leve brillo en el color outline separa la forma del fondo (drop-shadow 1px).
-    final shapePath = M3Shape.cookie9.toPath(
+    final shapePath = shape.toPath(
       Rect.fromCircle(center: Offset(c, c), radius: coverR),
       rotation: rotRad,
     );
-    canvas.drawPath(
-      shapePath,
-      Paint()
-        ..color = glow
-        ..maskFilter = const MaskFilter.blur(BlurStyle.outer, 1.2),
-    );
 
+    if (glow != null) {
+      canvas.drawPath(
+        shapePath,
+        Paint()
+          ..color = glow!
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, s * 0.06),
+      );
+    }
+    // Un leve brillo en el color outline separa la forma del fondo (drop-shadow 1px).
+    if (outline != null) {
+      canvas.drawPath(
+        shapePath,
+        Paint()
+          ..color = outline!
+          ..maskFilter = const MaskFilter.blur(BlurStyle.outer, 1.2),
+      );
+    }
+    if (!bars) return;
+
+    final lv = levels();
+    final n = lv.length;
+    final stroke = geo.stroke;
     final paint = Paint()
       ..color = color
       ..strokeWidth = stroke
-      ..strokeCap = StrokeCap.round
+      ..strokeCap = roundCaps ? StrokeCap.round : StrokeCap.butt
       ..style = PaintingStyle.stroke;
-    for (var i = 0; i < bars; i++) {
-      final value = levels[i].clamp(0.01, 1.0);
+    // Con extremos rectos, el "punto" de pausa se dibuja como un cuadrado chico.
+    final minLen = roundCaps ? 0.0 : stroke * 0.6;
+    for (var i = 0; i < n; i++) {
+      final raw = lv[i];
+      if (!pausedDots && raw < 0.02) continue;
+      final value = raw.clamp(0.01, 1.0);
       // Ángulo desde arriba, en sentido horario (convención de shapes.js).
-      final fromTop = i / bars * math.pi * 2;
-      final edge = coverR * M3Shape.cookie9.radiusAt(fromTop - rotRad) + spacing + stroke / 2;
-      final dist = edge + value * maxMagnitude;
+      final fromTop = i / n * math.pi * 2;
+      final edge = coverR * shape.radiusAt(fromTop - rotRad) + geo.spacing + stroke / 2;
+      final dist = edge + math.max(minLen, value * geo.magnitude);
       final sn = math.sin(fromTop), cs = -math.cos(fromTop);
       canvas.drawLine(Offset(c + sn * edge, c + cs * edge), Offset(c + sn * dist, c + cs * dist), paint);
     }
   }
 
   @override
-  bool shouldRepaint(_BarsPainter old) => old.color != color || old.glow != glow || old.coverR != coverR;
+  bool shouldRepaint(_BarsPainter old) =>
+      old.color != color ||
+      old.outline != outline ||
+      old.glow != glow ||
+      old.shape != shape ||
+      old.bars != bars ||
+      old.roundCaps != roundCaps ||
+      old.pausedDots != pausedDots ||
+      old.geo.coverR != geo.coverR ||
+      old.geo.stroke != geo.stroke ||
+      old.geo.magnitude != geo.magnitude ||
+      old.geo.spacing != geo.spacing;
 }
 
 /// Pseudo-espectro: una envolvente con más energía en los graves (arriba), ruido suave
@@ -230,7 +334,7 @@ class _Spectrum {
   }
 
   double target(int k) {
-    final x = k / (bands - 1); // 0 = graves (arriba), 1 = agudos (abajo)
+    final x = bands <= 1 ? 0.0 : k / (bands - 1); // 0 = graves (arriba), 1 = agudos (abajo)
     final env = 0.98 - 0.82 * math.pow(x, 0.7);
     const beatHz = 118 / 60;
     final ph = (_t * beatHz) % 1.0;

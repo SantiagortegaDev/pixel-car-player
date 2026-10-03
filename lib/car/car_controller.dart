@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:ui' show Brightness, Color, PlatformDispatcher;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show ColorScheme;
+import 'package:pixel_car_player/car/custom/car_customization.dart';
+import 'package:pixel_car_player/car/custom/car_customization_store.dart';
 import 'package:pixel_car_player/car/lyrics/lrclib_client.dart';
 import 'package:pixel_car_player/core/models/now_playing.dart';
 import 'package:pixel_car_player/core/theme/app_theme.dart';
@@ -35,35 +38,45 @@ class CarController extends ChangeNotifier {
   CarController({
     bool demo = false,
     CarPrefs? prefs,
+    CarCustomizationStore? custom,
     CarLinkClient? link,
     NativeBridge? bridge,
     LrcLibClient? lrclib,
     DemoSource Function()? demoFactory,
-    Future<ColorScheme> Function(Uint8List artwork)? schemeBuilder,
+    Future<Color> Function(Uint8List artwork)? seedBuilder,
   }) : _bridge = bridge ?? NativeBridge.instance,
        prefs = prefs ?? CarPrefs(demo: demo),
+       _ownsCustom = custom == null,
+       custom = custom ?? CarCustomizationStore(),
        _demoFactory = demoFactory ?? DemoSource.fromUrl,
-       _schemeBuilder = schemeBuilder ?? schemeFromArtwork {
+       _seedBuilder = seedBuilder ?? AppTheme.seedFromImageBytes {
     _lrclib = lrclib;
     this.prefs.demo = demo || this.prefs.demo;
+    final conn = this.custom.value.connection;
     this.link =
         link ??
         CarLinkClient(
           bridge: _bridge,
-          manualIp: this.prefs.manualIp,
-          btAddress: this.prefs.btAddress,
+          manualIp: conn.transport == CarTransport.bt ? null : this.prefs.manualIp,
+          btAddress: conn.transport == CarTransport.wifi ? null : this.prefs.btAddress,
           btName: this.prefs.btName,
+          useWifi: conn.transport != CarTransport.bt,
+          maxBackoff: Duration(seconds: conn.reconnectSeconds),
         );
+    _lastConnection = conn;
+    this.custom.addListener(_onCustom);
   }
 
   final NativeBridge _bridge;
   final DemoSource Function() _demoFactory;
-  final Future<ColorScheme> Function(Uint8List artwork) _schemeBuilder;
+  final Future<Color> Function(Uint8List artwork) _seedBuilder;
 
-  /// Esquema Tonal Spot (oscuro) generado desde una carátula, igual que Harmonix v2
-  /// (`seedFromImage` → `applySeed`).
-  static Future<ColorScheme> schemeFromArtwork(Uint8List bytes) async =>
-      AppTheme.schemeFromSeed(await AppTheme.seedFromImageBytes(bytes));
+  /// Personalización de la pantalla (se aplica en vivo).
+  final CarCustomizationStore custom;
+  final bool _ownsCustom;
+  late CarConnectionOpts _lastConnection;
+
+  CarCustomization get cfg => custom.value;
 
   /// Esquema cuando no hay carátula.
   static final ColorScheme fallbackScheme = AppTheme.schemeFromSeed(AppTheme.fallbackSeed);
@@ -71,8 +84,9 @@ class CarController extends ChangeNotifier {
   late final CarLinkClient link;
   CarPrefs prefs;
 
-  /// Adelanto con el que se resalta la línea de letra (compensa latencia BT).
-  static const lyricLead = Duration(milliseconds: 150);
+  /// Adelanto con el que se resalta la línea de letra (compensa latencia BT); se ajusta
+  /// en Configuración → Letra.
+  Duration get lyricLead => Duration(milliseconds: cfg.lyrics.offsetMs);
 
   // ---- Estado ----
   NowPlaying _remote = const NowPlaying(); // celular o demo
@@ -80,10 +94,12 @@ class CarController extends ChangeNotifier {
   List<QueueItem> _queue = const [];
   String? _remoteDevice;
   String? _remoteSource;
-  ColorScheme _scheme = fallbackScheme;
-  Uint8List? _schemeFor;
-  final Map<String, ColorScheme> _schemeCache = {};
-  static const _schemeCacheSize = 24;
+  Color? _artSeed;
+  Uint8List? _seedFor;
+  final Map<String, Color> _seedCache = {};
+  static const _seedCacheSize = 24;
+  ColorScheme? _schemeMemo;
+  Object? _schemeMemoKey;
   List<String> tabletIps = const [];
 
   final ValueNotifier<Duration> position = ValueNotifier(Duration.zero);
@@ -97,8 +113,18 @@ class CarController extends ChangeNotifier {
   Timer? _ipTimer;
   bool _started = false;
   bool _disposed = false;
+  bool _linkStarted = false;
+
+  /// Demo de relleno mientras no hay celular (Conexión → "Mostrar demo sin celular").
+  bool _idleDemo = false;
 
   bool get demo => prefs.demo;
+
+  /// Se está buscando / manteniendo la conexión con el celular.
+  bool get linkRunning => _linkStarted;
+
+  /// Se muestra la demo porque no hay celular (no es el modo demo).
+  bool get idleDemo => _idleDemo;
   ValueListenable<LinkStatus> get linkStatus => link.status;
 
   /// Estado del enlace a mostrar (en demo se finge conectado).
@@ -110,6 +136,7 @@ class CarController extends ChangeNotifier {
     if (demo) return CarSource.demo;
     if (link.status.value.isConnected) return CarSource.phone;
     if (_local.track != null) return CarSource.local;
+    if (_idleDemo) return CarSource.demo;
     return CarSource.none;
   }
 
@@ -128,8 +155,27 @@ class CarController extends ChangeNotifier {
   /// Paquete de la app de música (`com.spotify.music`…).
   String? get sourcePackage => source == CarSource.local ? _localPackage : (nowPlaying.track?.source ?? _remoteSource);
 
-  /// Esquema de color actual (de la carátula que suena).
-  ColorScheme get scheme => _scheme;
+  /// Semilla del color: la de la carátula que suena o el color fijo de Configuración.
+  Color get seed => cfg.design.colorSource == CarColorSource.fixed
+      ? Color(cfg.design.fixedColor)
+      : (_artSeed ?? AppTheme.fallbackSeed);
+
+  /// Esquema de color actual (variante y modo de Configuración). [platform] se usa con
+  /// el tema "Automático".
+  ColorScheme schemeFor([Brightness? platform]) {
+    final d = cfg.design;
+    final brightness = switch (d.themeMode) {
+      CarThemeMode.dark => Brightness.dark,
+      CarThemeMode.light => Brightness.light,
+      CarThemeMode.auto => platform ?? PlatformDispatcher.instance.platformBrightness,
+    };
+    final key = (seed.toARGB32(), d.variant, brightness);
+    if (key == _schemeMemoKey && _schemeMemo != null) return _schemeMemo!;
+    _schemeMemoKey = key;
+    return _schemeMemo = AppTheme.schemeFromSeed(seed, brightness: brightness, variant: d.variant);
+  }
+
+  ColorScheme get scheme => schemeFor();
 
   // ---------------------------------------------------------------------------
 
@@ -147,16 +193,71 @@ class CarController extends ChangeNotifier {
       _nativeSub = _bridge.events.listen(_onNative, onError: (_) {});
       unawaited(_bridge.startLocalMediaWatch());
     }
+    _msgSub ??= link.messages.listen(apply);
     if (demo) {
       await _startDemo();
-    } else {
+    } else if (cfg.connection.autoConnect) {
       await _startLink();
     }
+    _syncIdleDemo();
   }
 
   Future<void> _startLink() async {
     _msgSub ??= link.messages.listen(apply);
+    _linkStarted = true;
     await link.start();
+  }
+
+  /// Empieza a buscar al celular (con "Conexión automática" apagada, o para reintentar ya).
+  Future<void> connectNow() async {
+    if (demo) return;
+    if (_linkStarted) {
+      link.reconnect();
+    } else {
+      await _startLink();
+    }
+    _changed();
+  }
+
+  /// Corta la conexión y deja de buscar hasta [connectNow].
+  Future<void> disconnect() async {
+    _linkStarted = false;
+    await link.stop();
+    _changed();
+  }
+
+  void _onCustom() {
+    final conn = cfg.connection;
+    if (conn != _lastConnection) {
+      final old = _lastConnection;
+      _lastConnection = conn;
+      if (old.transport != conn.transport || old.reconnectSeconds != conn.reconnectSeconds) _configureLink();
+      if (conn.autoConnect && !old.autoConnect && !_linkStarted && !demo && _started) unawaited(_startLink());
+      _syncIdleDemo();
+    }
+    _changed();
+  }
+
+  void _configureLink() {
+    final t = cfg.connection.transport;
+    link.configure(
+      manualIp: t == CarTransport.bt ? null : prefs.manualIp,
+      btAddress: t == CarTransport.wifi ? null : prefs.btAddress,
+      btName: prefs.btName,
+      useWifi: t != CarTransport.bt,
+      maxBackoff: Duration(seconds: cfg.connection.reconnectSeconds),
+    );
+  }
+
+  /// Arranca o para la demo de relleno según haya o no algo real que mostrar.
+  void _syncIdleDemo() {
+    if (_disposed || !_started) return;
+    final want = cfg.connection.demoWhenIdle && !demo && !link.status.value.isConnected && _local.track == null;
+    if (want == _idleDemo) return;
+    _idleDemo = want;
+    _remote = const NowPlaying();
+    _queue = const [];
+    unawaited(want ? _startDemo() : _stopDemo());
   }
 
   Future<void> _startDemo() async {
@@ -180,12 +281,18 @@ class CarController extends ChangeNotifier {
     unawaited(prefs.save());
     _remote = const NowPlaying();
     _queue = const [];
+    if (_idleDemo) {
+      _idleDemo = false;
+      await _stopDemo();
+    }
     if (on) {
+      _linkStarted = false;
       await link.stop();
       await _startDemo();
     } else {
       await _stopDemo();
-      await _startLink();
+      if (cfg.connection.autoConnect) await _startLink();
+      _syncIdleDemo();
     }
     _changed();
   }
@@ -204,7 +311,7 @@ class CarController extends ChangeNotifier {
       ..btAddress = btAddress
       ..btName = btName;
     await prefs.save();
-    link.configure(manualIp: manualIp, btAddress: btAddress, btName: btName);
+    _configureLink();
     _changed();
   }
 
@@ -221,11 +328,12 @@ class CarController extends ChangeNotifier {
     if (!demo) {
       if (st.isConnected) {
         _remoteDevice = st.device;
-      } else {
+      } else if (!_idleDemo) {
         _remote = const NowPlaying();
         _queue = const [];
       }
     }
+    _syncIdleDemo();
     _changed();
   }
 
@@ -279,7 +387,9 @@ class CarController extends ChangeNotifier {
     if (e['type'] != 'localMedia') return;
     final title = (e['title'] as String?) ?? '';
     if (title.isEmpty) {
+      if (_local.track == null) return;
       _local = const NowPlaying();
+      _syncIdleDemo();
       _changed();
       return;
     }
@@ -310,6 +420,7 @@ class CarController extends ChangeNotifier {
       positionAt: DateTime.now(),
     );
     if (!same) _fetchLocalLyrics(track);
+    _syncIdleDemo();
     _changed();
   }
 
@@ -396,48 +507,51 @@ class CarController extends ChangeNotifier {
   void _changed() {
     if (_disposed) return;
     _tick();
-    _updateScheme();
+    _updateSeed();
     notifyListeners();
   }
 
-  /// Calcula (o toma de la caché por pista) el esquema de la carátula.
-  void _updateScheme() {
+  /// Calcula (o toma de la caché por pista) la semilla de color de la carátula, como
+  /// `seedFromImage` de Harmonix v2. El esquema sale de ahí con la variante elegida.
+  void _updateSeed() {
     final np = nowPlaying;
     final art = np.artwork;
-    if (identical(art, _schemeFor)) return;
-    _schemeFor = art;
+    if (identical(art, _seedFor)) return;
+    _seedFor = art;
     if (art == null) {
       // Se conserva el color anterior hasta que llegue otra carátula,
       // salvo que ya no haya nada que mostrar.
-      if (np.track == null) _scheme = fallbackScheme;
+      if (np.track == null) _artSeed = null;
       return;
     }
     final key = '${np.track?.id}#${art.length}';
-    final cached = _schemeCache.remove(key);
+    final cached = _seedCache.remove(key);
     if (cached != null) {
-      _schemeCache[key] = cached; // LRU: al final.
-      _scheme = cached;
+      _seedCache[key] = cached; // LRU: al final.
+      _artSeed = cached;
       return;
     }
-    _schemeBuilder(art)
+    _seedBuilder(art)
         .then((s) {
           if (_disposed) return;
-          _schemeCache[key] = s;
-          while (_schemeCache.length > _schemeCacheSize) {
-            _schemeCache.remove(_schemeCache.keys.first);
+          _seedCache[key] = s;
+          while (_seedCache.length > _seedCacheSize) {
+            _seedCache.remove(_seedCache.keys.first);
           }
-          if (!identical(_schemeFor, art)) return;
-          _scheme = s;
+          if (!identical(_seedFor, art)) return;
+          _artSeed = s;
           notifyListeners();
         })
         .catchError((Object e) {
-          debugPrint('schemeFromArtwork: $e');
+          debugPrint('seedFromArtwork: $e');
         });
   }
 
   @override
   void dispose() {
     _disposed = true;
+    custom.removeListener(_onCustom);
+    if (_ownsCustom) custom.dispose();
     _ticker?.cancel();
     _ipTimer?.cancel();
     _msgSub?.cancel();

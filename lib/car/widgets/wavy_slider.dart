@@ -18,6 +18,7 @@ class HxWavySlider extends StatefulWidget {
     required this.playing,
     required this.onSeek,
     this.height = 12,
+    this.waveAmplitude = 1,
   });
 
   /// Posición "en vivo" (se lee en cada cuadro mientras suena).
@@ -26,6 +27,9 @@ class HxWavySlider extends StatefulWidget {
   final bool playing;
   final ValueChanged<Duration> onSeek;
   final double height;
+
+  /// Multiplicador de la amplitud de la onda (0 = recta).
+  final double waveAmplitude;
 
   static const frequency = 5.0;
   static const waveMs = 2000.0;
@@ -144,7 +148,7 @@ class _HxWavySliderState extends State<HxWavySlider> with TickerProviderStateMix
     final h = widget.height;
     final line = h * 0.7;
     final amp = line * 0.5;
-    final boxH = math.max(h * 3.5, line + amp * 2 + 4);
+    final boxH = math.max(h * 3.5, line + amp * 2 * widget.waveAmplitude + 4);
     return Semantics(
       slider: true,
       label: 'Posición',
@@ -173,6 +177,7 @@ class _HxWavySliderState extends State<HxWavySlider> with TickerProviderStateMix
                         primary: cs.primary,
                         track: cs.secondaryContainer,
                         drag: _drag,
+                        waveAmp: widget.waveAmplitude,
                       ),
                     ),
                   ),
@@ -216,7 +221,10 @@ class _WavyPainter extends CustomPainter {
     required this.primary,
     required this.track,
     required this.drag,
+    required this.waveAmp,
   }) : super(repaint: Listenable.merge([frame, drag]));
+
+  final double waveAmp;
 
   final _HxWavySliderState state;
   final double h;
@@ -229,7 +237,7 @@ class _WavyPainter extends CustomPainter {
     final w = size.width;
     final cy = size.height / 2;
     final line = h * 0.7;
-    final amp = line * 0.5 * state._amp;
+    final amp = line * 0.5 * state._amp * waveAmp;
     const gap = HxWavySlider.gap, handle = HxWavySlider.handle;
     // Largo útil (sin el cursor), como `fullLength` en Caelestia.
     final full = math.max(0.0, w - handle - gap * 2);
@@ -282,5 +290,6 @@ class _WavyPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_WavyPainter old) => old.primary != primary || old.track != track || old.h != h;
+  bool shouldRepaint(_WavyPainter old) =>
+      old.primary != primary || old.track != track || old.h != h || old.waveAmp != waveAmp;
 }
