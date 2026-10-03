@@ -1,12 +1,16 @@
 package com.santiagortega.pixelcarplayer
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.util.Log
 import android.view.WindowManager
 import androidx.core.app.ActivityCompat
@@ -75,6 +79,23 @@ class MainActivity : FlutterActivity() {
                 result.success(null)
             }
             "requestRuntimePermissions" -> requestRuntimePermissions(result)
+            "canDrawOverlays" -> result.success(
+                Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(ctx)
+            )
+            "openOverlaySettings" -> {
+                openSettingsSafely(
+                    Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")),
+                    appDetailsFallback = true,
+                )
+                result.success(null)
+            }
+            "openBatteryOptimizationSettings" -> {
+                openSettingsSafely(
+                    Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+                    appDetailsFallback = true,
+                )
+                result.success(null)
+            }
             "getLocalIps" -> background(result) { NetUtils.localIps() }
 
             // ---- phone (transmitter)
@@ -156,6 +177,23 @@ class MainActivity : FlutterActivity() {
                         result.error("native_error", it.message, null)
                     },
                 )
+            }
+        }
+    }
+
+    private fun openSettingsSafely(intent: Intent, appDetailsFallback: Boolean) {
+        try {
+            startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: ActivityNotFoundException) {
+            Log.w(TAG, "settings intent not found: ${intent.action}", e)
+            if (!appDetailsFallback) return
+            try {
+                startActivity(
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            } catch (e2: Exception) {
+                Log.w(TAG, "app details settings failed", e2)
             }
         }
     }

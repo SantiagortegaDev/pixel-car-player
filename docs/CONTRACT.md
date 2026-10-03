@@ -65,6 +65,17 @@ La tableta interpola la posición con su propio reloj desde el instante en que r
 | `startLocalMediaWatch` | — | `bool` | tableta |
 | `stopLocalMediaWatch` | — | — | tableta |
 | `localMediaCommand` | `{action, positionMs?}` (mismas acciones que `cmd`) | `bool` | tableta |
+| `canDrawOverlays` | — | `bool` (`true` bajo API 23) | tableta |
+| `openOverlaySettings` | — | — (abre `ACTION_MANAGE_OVERLAY_PERMISSION`; fallback a info de la app) | tableta |
+| `openBatteryOptimizationSettings` | — | — (abre `ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS`; fallback a info de la app) | tableta |
+
+**Inicio automático**: `BootReceiver` (exportado, `RECEIVE_BOOT_COMPLETED`) escucha `BOOT_COMPLETED`,
+`LOCKED_BOOT_COMPLETED`, `QUICKBOOT_POWERON`, `MY_PACKAGE_REPLACED` y broadcasts "ACC on" de head units
+(`android.intent.action.ACC_ON`, `com.fyt.boot.ACCON`, `com.microntek.bootcheck`,
+`autochips.intent.action.QB_POWERON`). Lee `FlutterSharedPreferences`: `flutter.app_mode == "car"` y
+`flutter.car_autostart == true` (Boolean); opcional `flutter.car_autostart_delay` (segundos, Long, default 3).
+Tras el delay lanza `MainActivity` (`FLAG_ACTIVITY_NEW_TASK`). En Android 10+ requiere `SYSTEM_ALERT_WINDOW`
+(se intenta igual sin el permiso; errores se registran con tag `PCP`).
 
 `EventChannel("pcp/events")` — un único stream de `Map` con campo `type`:
 
