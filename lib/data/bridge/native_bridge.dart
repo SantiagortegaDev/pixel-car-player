@@ -88,4 +88,65 @@ class NativeBridge {
       await _call<bool>('localMediaCommand',
           {'action': action, 'positionMs': ?positionMs}) ??
       false;
+  Map<String, dynamic> _map(Object? v) =>
+      v is Map ? Map<String, dynamic>.from(v) : <String, dynamic>{};
+
+  // ---- Tableta: hotspot del carro ----
+  /// `{enabled: bool?, ssid: String?, password: String?, method: String,
+  ///   canWriteSettings: bool}`; `enabled` null = no se pudo leer.
+  Future<Map<String, dynamic>> getHotspotState() async =>
+      _map(await _call<Map>('getHotspotState'));
+
+  /// Intenta encender/apagar el hotspot (tethering → wifiAp → localOnly).
+  /// `{ok: bool, method: 'tethering'|'wifiAp'|'localOnly'|'none',
+  ///   needsSettings: bool, ssid: String?, password: String?}`.
+  Future<Map<String, dynamic>> setHotspotEnabled(bool enabled) async =>
+      _map(await _call<Map>('setHotspotEnabled', {'enabled': enabled}));
+  Future<void> openHotspotSettings() => _call('openHotspotSettings');
+  Future<void> openWriteSettings() => _call('openWriteSettings');
+
+  /// IPs vecinas (tabla ARP): clientes del hotspot de la tableta.
+  Future<List<String>> getNeighborIps() async =>
+      (await _call<List>('getNeighborIps') ?? const []).cast<String>();
+
+  // ---- Tableta: visualizador con el audio real (Visualizer, sesión 0) ----
+  Future<bool> requestAudioPermission() async =>
+      await _call<bool>('requestAudioPermission') ?? false;
+
+  /// Empieza a emitir eventos `{type:'fft', bands: List<double>(64, 0..1), rms: double}`
+  /// a ~30 fps. false si no hay permiso o el equipo no lo soporta.
+  Future<bool> startVisualizer() async =>
+      await _call<bool>('startVisualizer') ?? false;
+  Future<void> stopVisualizer() => _call('stopVisualizer');
+
+  // ---- Tableta: app acompañante (p. ej. la de música Bluetooth del radio) ----
+  /// `[{package, label, icon: Uint8List(PNG 96px)?}]` ordenado por nombre.
+  Future<List<Map<String, dynamic>>> getLaunchableApps() async =>
+      (await _call<List>('getLaunchableApps') ?? const [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
+  /// Abre [package]; con [background] vuelve a traer Pixel Car Player al frente
+  /// después de [delayMs] para que la otra app quede corriendo detrás.
+  Future<bool> launchApp(String package,
+          {bool background = true, int delayMs = 1500}) async =>
+      await _call<bool>('launchApp', {
+        'package': package,
+        'background': background,
+        'delayMs': delayMs,
+      }) ??
+      false;
+  Future<void> bringToFront() => _call('bringToFront');
+
+  // ---- Celular: conectarse solo al hotspot del carro ----
+  /// Registra (o quita con enabled=false) la red del carro para conexión automática.
+  /// `{ok: bool, method: 'suggestion'|'legacy'|'none', error: String?}`.
+  Future<Map<String, dynamic>> setHotspotAutoConnect(
+          {required String ssid, required String password, required bool enabled}) async =>
+      _map(await _call<Map>('setHotspotAutoConnect',
+          {'ssid': ssid, 'password': password, 'enabled': enabled}));
+
+  /// `{connected: bool, ssid: String?}` (ssid puede faltar sin permiso de ubicación).
+  Future<Map<String, dynamic>> getWifiStatus() async =>
+      _map(await _call<Map>('getWifiStatus'));
 }
