@@ -47,24 +47,27 @@ void main() {
     final at = DateTime(2026, 1, 1, 12);
 
     test('avanza con el reloj local mientras suena', () {
-      final np = NowPlaying(
-          track: _track, playing: true, position: const Duration(seconds: 30), positionAt: at);
-      expect(np.livePosition(at.add(const Duration(milliseconds: 1500))),
-          const Duration(seconds: 31, milliseconds: 500));
+      final np = NowPlaying(track: _track, playing: true, position: const Duration(seconds: 30), positionAt: at);
+      expect(
+        np.livePosition(at.add(const Duration(milliseconds: 1500))),
+        const Duration(seconds: 31, milliseconds: 500),
+      );
     });
 
     test('respeta la velocidad', () {
-      final np = NowPlaying(
-          track: _track, playing: true, position: Duration.zero, positionAt: at, speed: 2);
+      final np = NowPlaying(track: _track, playing: true, position: Duration.zero, positionAt: at, speed: 2);
       expect(np.livePosition(at.add(const Duration(seconds: 3))), const Duration(seconds: 6));
     });
 
     test('pausado no avanza; no pasa de la duración', () {
-      final paused = NowPlaying(
-          track: _track, playing: false, position: const Duration(seconds: 30), positionAt: at);
+      final paused = NowPlaying(track: _track, playing: false, position: const Duration(seconds: 30), positionAt: at);
       expect(paused.livePosition(at.add(const Duration(minutes: 1))), const Duration(seconds: 30));
       final end = NowPlaying(
-          track: _track, playing: true, position: const Duration(minutes: 3, seconds: 40), positionAt: at);
+        track: _track,
+        playing: true,
+        position: const Duration(minutes: 3, seconds: 40),
+        positionAt: at,
+      );
       expect(end.livePosition(at.add(const Duration(minutes: 1))), _track.duration);
     });
   });

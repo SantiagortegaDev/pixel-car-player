@@ -39,6 +39,15 @@ class LinkProtocol {
   };
   static Map<String, dynamic> pong() => {'t': 'pong'};
   static Map<String, dynamic> resync() => {'t': 'resync'};
+  /// Celular → tableta: próximos temas de la cola (hasta [maxQueue]).
+  static Map<String, dynamic> queue(List<QueueItem> items) => {
+    't': 'queue',
+    'items': [for (final i in items.take(maxQueue)) i.toJson()],
+  };
+
+  /// Máximo de temas de `queue` que se envían / aceptan.
+  static const int maxQueue = 20;
+
   static Map<String, dynamic> cmd(LinkAction action, {int? positionMs}) => {
     't': 'cmd',
     'action': action.name,
@@ -159,6 +168,16 @@ sealed class LinkMessage {
           synced: j['synced'] == true,
           lines: lines,
         );
+      case 'queue':
+        final items =
+            (j['items'] as List?)
+                ?.whereType<Map>()
+                .map((e) => QueueItem.fromJson(Map<String, dynamic>.from(e)))
+                .where((e) => e.title.isNotEmpty)
+                .take(LinkProtocol.maxQueue)
+                .toList() ??
+            const <QueueItem>[];
+        return QueueMessage(items);
       case 'ping':
         return const PingMessage();
       case 'beacon':
@@ -209,6 +228,32 @@ class LyricsMessage extends LinkMessage {
   final LyricsStatus status;
   final bool synced;
   final List<LyricLine> lines;
+}
+
+/// Tema de la cola (`queue`): solo título y artista.
+class QueueItem {
+  const QueueItem({required this.title, this.artist = ''});
+  final String title;
+  final String artist;
+
+  factory QueueItem.fromJson(Map<String, dynamic> j) => QueueItem(
+    title: (j['title'] as String?) ?? '',
+    artist: (j['artist'] as String?) ?? '',
+  );
+
+  Map<String, dynamic> toJson() => {'title': title, 'artist': artist};
+
+  @override
+  bool operator ==(Object other) => other is QueueItem && other.title == title && other.artist == artist;
+
+  @override
+  int get hashCode => Object.hash(title, artist);
+}
+
+/// Próximos temas (puede no llegar nunca: la lista vacía es válida).
+class QueueMessage extends LinkMessage {
+  const QueueMessage(this.items);
+  final List<QueueItem> items;
 }
 
 class PingMessage extends LinkMessage {

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:material_symbols_icons/symbols.dart';
 import 'package:pixel_car_player/core/app_mode.dart';
 import 'package:pixel_car_player/core/theme/app_theme.dart';
 import 'package:pixel_car_player/phone/phone_root.dart';
@@ -14,13 +15,23 @@ Future<void> _pump(
 ) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
+  tester.platformDispatcher.platformBrightnessTestValue = brightness;
   addTearDown(tester.view.reset);
+  addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
   final scheme = AppTheme.schemeFromSeed(
     AppTheme.fallbackSeed,
     brightness: brightness,
   );
   await tester.pumpWidget(MaterialApp(theme: AppTheme.build(scheme), home: w));
+  // Hay animaciones infinitas (formas que giran): nada de pumpAndSettle.
   await tester.pump(const Duration(milliseconds: 300));
+  await tester.pump(const Duration(seconds: 1));
+}
+
+Future<void> _settle(WidgetTester tester) async {
+  for (var i = 0; i < 10; i++) {
+    await tester.pump(const Duration(milliseconds: 100));
+  }
 }
 
 void main() {
@@ -48,13 +59,20 @@ void main() {
           size,
           brightness,
         );
+        expect(find.text('Pixel Car Player'), findsOneWidget);
         expect(find.text('Pantalla del carro (tableta)'), findsOneWidget);
         expect(find.text('Transmisor (celular con Spotify)'), findsOneWidget);
-        expect(find.widgetWithText(FilledButton, 'Elegir'), findsNWidgets(2));
+        expect(find.text('Elegir'), findsNWidgets(2));
         expect(tester.takeException(), isNull);
+        await tester.ensureVisible(
+          find.text('Transmisor (celular con Spotify)'),
+        );
+        await tester.pump();
         await tester.tap(find.text('Transmisor (celular con Spotify)'));
         expect(picked, AppMode.phone);
-        await tester.tap(find.widgetWithText(FilledButton, 'Elegir').first);
+        await tester.ensureVisible(find.text('Elegir').first);
+        await tester.pump();
+        await tester.tap(find.text('Elegir').first);
         expect(picked, AppMode.car);
       });
 
@@ -65,17 +83,25 @@ void main() {
           var changed = false;
           await _pump(
             tester,
-            PhoneRoot(onChangeMode: () => changed = true),
+            PhoneRoot(
+              onChangeMode: () => changed = true,
+              now: () => DateTime(2026, 10, 3, 16),
+            ),
             size,
             brightness,
           );
-          expect(find.text('Pixel Car Player'), findsWidgets);
-          expect(find.text('Transmisor activo'), findsOneWidget);
-          expect(find.text('YT Music'), findsOneWidget);
+          // El tema sigue al sistema.
+          final ctx = tester.element(find.text('Buenas tardes'));
+          expect(Theme.of(ctx).brightness, brightness);
+
+          expect(find.text('Pixel Car Player'), findsOneWidget);
+          expect(find.text('Luces de Neón'), findsOneWidget);
+          expect(find.text('Reproduciendo'), findsOneWidget);
           expect(find.text('Letras sincronizadas'), findsOneWidget);
+          expect(find.text('Transmisor activo'), findsOneWidget);
+          expect(find.text('Detener'), findsOneWidget);
           expect(tester.takeException(), isNull);
 
-          // Elementos inferiores (fuera de pantalla en el celular).
           await tester.scrollUntilVisible(
             find.text('Pantalla K24'),
             300,
@@ -84,9 +110,35 @@ void main() {
           expect(find.text('Pantalla K24'), findsOneWidget);
           expect(tester.takeException(), isNull);
 
-          await tester.tap(find.byIcon(Icons.more_vert_rounded));
-          await tester.pumpAndSettle();
+          // Conexión.
+          await tester.tap(find.text('Conexión'));
+          await _settle(tester);
+          expect(find.text('Cómo conectar'), findsOneWidget);
+          expect(find.text('192.168.43.1:47321'), findsOneWidget);
+          expect(tester.takeException(), isNull);
+
+          // Ajustes: fuente de música y permisos.
+          await tester.tap(find.text('Ajustes'));
+          await _settle(tester);
+          expect(find.text('Leer música de'), findsOneWidget);
+          expect(find.text('YT Music'), findsOneWidget);
+          expect(find.text('Permisos'), findsOneWidget);
+          await tester.tap(find.text('YT Music'));
+          await _settle(tester);
+          final prefs = await SharedPreferences.getInstance();
+          expect(prefs.getString('phone_source'), 'youtubeMusic');
+          await tester.tap(find.text('Iniciar automáticamente'));
+          await _settle(tester);
+          expect(prefs.getBool('phone_autostart'), isFalse);
+          expect(tester.takeException(), isNull);
+
+          // Menú de la píldora del inicio → Cambiar modo.
+          await tester.tap(find.text('Inicio'));
+          await _settle(tester);
+          await tester.tap(find.byIcon(Symbols.more_vert_rounded));
+          await _settle(tester);
           await tester.tap(find.text('Cambiar modo'));
+          await _settle(tester);
           expect(changed, isTrue);
         },
       );

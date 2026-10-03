@@ -50,9 +50,7 @@ class LrcLibClient {
   final http.Client _client;
 
   static const _host = 'lrclib.net';
-  static const _headers = {
-    'User-Agent': 'PixelCarPlayer/1.0 (https://github.com/santiagortegadev)',
-  };
+  static const _headers = {'User-Agent': 'PixelCarPlayer/1.0 (https://github.com/santiagortegadev)'};
 
   Future<LyricsResult> fetch({
     required String title,
@@ -77,10 +75,7 @@ class LrcLibClient {
         if (r.status == LyricsStatus.ok) return r;
       }
       final search = await _client
-          .get(
-            Uri.https(_host, '/api/search', {'track_name': title, 'artist_name': artist}),
-            headers: _headers,
-          )
+          .get(Uri.https(_host, '/api/search', {'track_name': title, 'artist_name': artist}), headers: _headers)
           .timeout(const Duration(seconds: 8));
       if (search.statusCode == 200) {
         final list = jsonDecode(utf8.decode(search.bodyBytes));

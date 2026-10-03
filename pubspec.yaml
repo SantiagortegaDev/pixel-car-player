@@ -37,7 +37,8 @@ dependencies:
   provider: ^6.1.5+1
   shared_preferences: ^2.5.5
   http: ^1.6.0
-  dynamic_color: ^2.1.0
+  material_symbols_icons: ^4.2960.0
+  material_color_utilities: ^0.13.0
 
 dev_dependencies:
   flutter_test:
@@ -63,6 +64,15 @@ flutter:
 
   assets:
     - assets/demo/
+
+  # Tipografía de Harmonix v2 (OFL): Google Sans Flex + Rubik (números).
+  fonts:
+    - family: Google Sans Flex
+      fonts:
+        - asset: assets/fonts/GoogleSansFlex.ttf
+    - family: Rubik
+      fonts:
+        - asset: assets/fonts/Rubik.ttf
 
   # To add assets to your application, add an assets section, like this:
   # assets:

@@ -1,65 +1,256 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:material_symbols_icons/symbols.dart';
+import 'package:pixel_car_player/core/shapes/m3_shapes.dart';
+import 'package:pixel_car_player/core/theme/app_theme.dart';
 import 'package:pixel_car_player/phone/phone_controller.dart';
+import 'package:pixel_car_player/phone/widgets/hx/hx.dart';
 
-/// Widgets del modo celular — Material Design 3 / Material You estricto.
-///
-/// Todo el color sale de `Theme.of(context).colorScheme` (dinámico).
+/// Saludo de Harmonix según la hora.
+String greetingFor(DateTime now) {
+  final h = now.hour;
+  if (h < 6) return 'Buenas noches';
+  if (h < 13) return 'Buenos días';
+  if (h < 20) return 'Buenas tardes';
+  return 'Buenas noches';
+}
 
-/// Encabezado de sección estilo M3 (labelLarge en primary).
-class SectionHeader extends StatelessWidget {
-  const SectionHeader(this.text, {super.key});
-  final String text;
+/// Tarjeta de Harmonix (`.card` de "Escuchado hace poco"): surfaceContainer, radio 28.
+class HxCard extends StatelessWidget {
+  const HxCard({
+    super.key,
+    required this.child,
+    this.padding = const EdgeInsets.all(16),
+    this.color,
+  });
+  final Widget child;
+  final EdgeInsets padding;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) => AnimatedContainer(
+    duration: HxMotion.dFxSlow,
+    curve: HxMotion.standard,
+    padding: padding,
+    decoration: BoxDecoration(
+      color: color ?? Theme.of(context).colorScheme.surfaceContainer,
+      borderRadius: HxRadius.xl,
+    ),
+    child: child,
+  );
+}
+
+/// Ecualizador de `TrackRow .bars` (tres barras que suben y bajan).
+class EqualizerBars extends StatefulWidget {
+  const EqualizerBars({
+    super.key,
+    required this.playing,
+    required this.color,
+    this.height = 28,
+    this.barWidth = 5,
+  });
+  final bool playing;
+  final Color color;
+  final double height;
+  final double barWidth;
+
+  @override
+  State<EqualizerBars> createState() => _EqualizerBarsState();
+}
+
+class _EqualizerBarsState extends State<EqualizerBars>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 6300),
+  );
+
+  void _sync() {
+    final run =
+        widget.playing &&
+        !(MediaQuery.maybeDisableAnimationsOf(context) ?? false);
+    if (run && !_c.isAnimating) {
+      _c.repeat();
+    } else if (!run && _c.isAnimating) {
+      _c.stop();
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(EqualizerBars old) {
+    super.didUpdateWidget(old);
+    _sync();
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _c,
+    builder: (context, _) {
+      final secs = _c.value * 6.3;
+      // Duraciones/desfases de TrackRow: 0.9 s, 0.7 s (-0.3), 0.9 s (-0.6), alternadas.
+      double v(double dur, double delay) {
+        var t = ((secs + delay) / dur) % 2;
+        if (t > 1) t = 2 - t;
+        return 0.25 + 0.75 * Curves.easeInOut.transform(t);
+      }
+
+      final scales = [v(0.9, 0), v(0.7, 0.3), v(0.9, 0.6)];
+      return SizedBox(
+        height: widget.height,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            for (var i = 0; i < 3; i++) ...[
+              if (i > 0) SizedBox(width: widget.barWidth * 0.75),
+              Container(
+                width: widget.barWidth,
+                height: widget.height * scales[i],
+                decoration: BoxDecoration(
+                  color: widget.color,
+                  borderRadius: BorderRadius.circular(widget.barWidth / 2),
+                ),
+              ),
+            ],
+          ],
+        ),
+      );
+    },
+  );
+}
+
+/// "Sonando ahora": tarjeta con la portada recortada en cookie9 (como el tema que suena
+/// en Harmonix), título, artista y chips de estado.
+class NowPlayingCard extends StatelessWidget {
+  const NowPlayingCard({
+    super.key,
+    required this.session,
+    required this.lyricsStatus,
+    required this.running,
+    required this.source,
+  });
+  final PhoneSession? session;
+  final String? lyricsStatus;
+  final bool running;
+  final SourceApp source;
+
+  static String appName(String? pkg) => switch (pkg) {
+    'com.spotify.music' => 'Spotify',
+    'com.google.android.apps.youtube.music' => 'YouTube Music',
+    null => '',
+    _ => pkg.split('.').last,
+  };
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 24, 4, 8),
-      child: Text(
-        text,
-        style: Theme.of(context).textTheme.titleSmall
-            ?.copyWith(color: cs.primary),
+    final has = session?.title != null && session!.title!.isNotEmpty;
+    final playing = has && session!.playing;
+    final (lyricsLabel, lyricsIcon, lyricsOk) = switch (lyricsStatus) {
+      'ok' => ('Letras sincronizadas', Symbols.lyrics_rounded, true),
+      'loading' => ('Buscando letras…', Symbols.hourglass_top_rounded, false),
+      'not_found' => ('Sin letras', Symbols.lyrics_rounded, false),
+      _ => ('Letras: en espera', Symbols.lyrics_rounded, false),
+    };
+    final app = has ? appName(session!.package) : '';
+
+    return HxCard(
+      padding: const EdgeInsets.fromLTRB(12, 12, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              HxShapeTile(
+                shape: has ? M3Shape.cookie9 : M3Shape.square,
+                size: 96,
+                color: has ? cs.primaryContainer : cs.surfaceContainerHighest,
+                spin: playing,
+                child: playing
+                    ? EqualizerBars(
+                        playing: true,
+                        color: cs.onPrimaryContainer,
+                        height: 34,
+                        barWidth: 6,
+                      )
+                    : HxIcon(
+                        Symbols.music_note_rounded,
+                        size: 40,
+                        filled: true,
+                        color: has
+                            ? cs.onPrimaryContainer
+                            : cs.onSurfaceVariant,
+                      ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      has
+                          ? session!.title!
+                          : (running ? 'Nada sonando' : 'Transmisor apagado'),
+                      style: HxType.titleL(cs.onSurface),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      has
+                          ? ((session!.artist ?? '').isEmpty
+                                ? 'Artista desconocido'
+                                : session!.artist!)
+                          : 'Reproduce algo en ${source == SourceApp.any ? 'tu app de música' : source.label}',
+                      style: HxType.bodyL(cs.onSurfaceVariant),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (app.isNotEmpty)
+                      Text(
+                        app,
+                        style: HxType.bodyM(cs.onSurfaceVariant),
+                        maxLines: 1,
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              HxChip(
+                icon: playing
+                    ? Symbols.play_arrow_rounded
+                    : Symbols.pause_rounded,
+                label: playing ? 'Reproduciendo' : 'En pausa',
+                on: playing,
+              ),
+              HxChip(icon: lyricsIcon, label: lyricsLabel, on: lyricsOk),
+            ],
+          ),
+        ],
       ),
     );
   }
 }
 
-/// Mosaico de icono tonal (círculo o cuadrado redondeado).
-class TonalIcon extends StatelessWidget {
-  const TonalIcon({
-    super.key,
-    required this.icon,
-    required this.background,
-    required this.foreground,
-    this.size = 40,
-    this.iconSize,
-    this.radius,
-  });
-  final IconData icon;
-  final Color background;
-  final Color foreground;
-  final double size;
-  final double? iconSize;
-
-  /// `null` = círculo.
-  final double? radius;
-
-  @override
-  Widget build(BuildContext context) => AnimatedContainer(
-    duration: const Duration(milliseconds: 250),
-    width: size,
-    height: size,
-    decoration: BoxDecoration(
-      color: background,
-      shape: radius == null ? BoxShape.circle : BoxShape.rectangle,
-      borderRadius: radius == null ? null : BorderRadius.circular(radius!),
-    ),
-    child: Icon(icon, color: foreground, size: iconSize ?? size * 0.55),
-  );
-}
-
-/// Tarjeta héroe del transmisor.
+/// Transmisor: tarjeta con estado y el botón grande estilo "play" de `Controls`.
 class TransmitCard extends StatelessWidget {
   const TransmitCard({
     super.key,
@@ -80,411 +271,148 @@ class TransmitCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final t = Theme.of(context).textTheme;
-    final bg = running ? cs.primaryContainer : cs.surfaceContainerHigh;
-    final fg = running ? cs.onPrimaryContainer : cs.onSurface;
-    final fgVariant = running
-        ? cs.onPrimaryContainer.withValues(alpha: 0.8)
-        : cs.onSurfaceVariant;
     final subtitle = !running
-        ? (enabled ? 'Toca para empezar a transmitir' : 'Falta dar permisos')
+        ? (enabled ? 'Toca para empezar a transmitir' : 'Faltan permisos')
         : (cars > 0
               ? 'Transmitiendo a $cars pantalla${cars == 1 ? '' : 's'}'
               : 'Esperando a la tableta…');
+    final fg = running ? cs.onPrimary : cs.onSurfaceVariant;
 
-    void tap() {
-      HapticFeedback.mediumImpact();
-      onTap();
-    }
-
-    final onPressed = enabled && !busy ? tap : null;
-    final Widget icon = busy
-        ? SizedBox.square(
-            dimension: 20,
-            child: CircularProgressIndicator(
-              strokeWidth: 2.5,
-              color: cs.onPrimary,
-            ),
-          )
-        : Icon(running ? Icons.stop_rounded : Icons.play_arrow_rounded);
-    final label = Text(
-      running ? 'Detener transmisión' : 'Empezar a transmitir',
-    );
-
-    return Card(
-      color: bg,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+    return HxCard(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(0, 0, 4, 0),
+            child: Row(
               children: [
-                TonalIcon(
+                HxShapeTile(
+                  shape: running ? M3Shape.softBurst : M3Shape.circle,
+                  size: 56,
+                  color: running ? cs.primary : cs.surfaceContainerHighest,
+                  spin: running,
                   icon: running
-                      ? Icons.cast_connected_rounded
-                      : Icons.cast_rounded,
-                  background: running ? cs.primary : cs.secondaryContainer,
-                  foreground: running ? cs.onPrimary : cs.onSecondaryContainer,
-                  size: 64,
-                  radius: 20,
-                  iconSize: 32,
+                      ? Symbols.cast_connected_rounded
+                      : Symbols.cast_rounded,
+                  iconColor: running ? cs.onPrimary : cs.onSurfaceVariant,
+                  iconSize: 26,
                 ),
-                const SizedBox(width: 16),
+                const SizedBox(width: 14),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
                         running ? 'Transmisor activo' : 'Transmisor apagado',
-                        style: t.headlineSmall?.copyWith(color: fg),
+                        style: HxType.titleL(cs.onSurface),
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        subtitle,
-                        style: t.bodyMedium?.copyWith(color: fgVariant),
-                      ),
+                      Text(subtitle, style: HxType.bodyM(cs.onSurfaceVariant)),
                     ],
                   ),
                 ),
               ],
             ),
-            if (running) ...[
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  _InfoPill(
-                    icon: Icons.tablet_android_rounded,
-                    label: '$cars conectada${cars == 1 ? '' : 's'}',
-                  ),
-                  if (port != null)
-                    _InfoPill(icon: Icons.lan_rounded, label: 'Puerto $port'),
-                ],
-              ),
-            ],
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: onPressed,
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(56),
-                  shape: const StadiumBorder(),
-                ),
-                icon: icon,
-                label: label,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _InfoPill extends StatelessWidget {
-  const _InfoPill({required this.icon, required this.label});
-  final IconData icon;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: cs.onPrimaryContainer.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(100),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 16, color: cs.onPrimaryContainer),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            style: Theme.of(context).textTheme.labelLarge
-                ?.copyWith(color: cs.onPrimaryContainer),
           ),
-        ],
-      ),
-    );
-  }
-}
-
-/// "Iniciar automáticamente" como SwitchListTile dentro de una Card.
-class AutoStartCard extends StatelessWidget {
-  const AutoStartCard({
-    super.key,
-    required this.value,
-    required this.onChanged,
-  });
-  final bool value;
-  final ValueChanged<bool> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Card(
-      child: SwitchListTile(
-        value: value,
-        onChanged: onChanged,
-        contentPadding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        thumbIcon: WidgetStateProperty.resolveWith(
-          (s) => s.contains(WidgetState.selected)
-              ? const Icon(Icons.check_rounded)
-              : null,
-        ),
-        secondary: TonalIcon(
-          icon: Icons.bolt_rounded,
-          background: cs.secondaryContainer,
-          foreground: cs.onSecondaryContainer,
-        ),
-        title: const Text('Iniciar automáticamente'),
-        subtitle: const Text('Al abrir la app, si están los permisos'),
-      ),
-    );
-  }
-}
-
-/// Selector de app de origen: SegmentedButton M3.
-class SourceSelector extends StatelessWidget {
-  const SourceSelector({
-    super.key,
-    required this.value,
-    required this.onChanged,
-  });
-  final SourceApp value;
-  final ValueChanged<SourceApp> onChanged;
-
-  static const _meta = {
-    SourceApp.spotify: ('Spotify', Icons.graphic_eq_rounded),
-    SourceApp.youtubeMusic: ('YT Music', Icons.smart_display_rounded),
-    SourceApp.any: ('Cualquiera', Icons.apps_rounded),
-  };
-
-  @override
-  Widget build(BuildContext context) => SegmentedButton<SourceApp>(
-    expandedInsets: EdgeInsets.zero,
-    showSelectedIcon: false,
-    style: SegmentedButton.styleFrom(
-      minimumSize: const Size(0, 48),
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-    ),
-    segments: [
-      for (final s in SourceApp.values)
-        ButtonSegment(
-          value: s,
-          icon: Icon(_meta[s]!.$2),
-          label: Text(_meta[s]!.$1, maxLines: 1, softWrap: false),
-          tooltip: s.label,
-        ),
-    ],
-    selected: {value},
-    onSelectionChanged: (v) => onChanged(v.first),
-  );
-}
-
-/// Sonando ahora.
-class NowPlayingCard extends StatelessWidget {
-  const NowPlayingCard({
-    super.key,
-    required this.session,
-    required this.lyricsStatus,
-    required this.running,
-  });
-  final PhoneSession? session;
-  final String? lyricsStatus;
-  final bool running;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final t = Theme.of(context).textTheme;
-    final has = session?.title != null && session!.title!.isNotEmpty;
-    final playing = session?.playing == true;
-    final (lyricsLabel, lyricsIcon, lyricsOk) = switch (lyricsStatus) {
-      'ok' => ('Letras sincronizadas', Icons.lyrics_rounded, true),
-      'loading' => ('Buscando letras…', Icons.hourglass_top_rounded, false),
-      'not_found' => ('Sin letras', Icons.lyrics_outlined, false),
-      _ => ('Letras: en espera', Icons.lyrics_outlined, false),
-    };
-
-    Widget chip({
-      required IconData icon,
-      required String label,
-      required Color bg,
-      required Color fg,
-    }) => Chip(
-      avatar: Icon(icon, color: fg, size: 18),
-      label: Text(label),
-      labelStyle: t.labelLarge?.copyWith(color: fg),
-      backgroundColor: bg,
-      side: BorderSide.none,
-      visualDensity: VisualDensity.compact,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-    );
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                TonalIcon(
-                  icon: playing
-                      ? Icons.equalizer_rounded
-                      : Icons.music_note_rounded,
-                  background: cs.primaryContainer,
-                  foreground: cs.onPrimaryContainer,
-                  size: 80,
-                  radius: 20,
-                  iconSize: 36,
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        has
-                            ? session!.title!
-                            : (running ? 'Nada sonando' : 'Transmisor apagado'),
-                        style: t.titleLarge,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        has
-                            ? (session!.artist ?? '')
-                            : 'Reproduce algo en tu app de música',
-                        style: t.bodyMedium?.copyWith(
-                          color: cs.onSurfaceVariant,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
+          if (running) ...[
+            const SizedBox(height: 14),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
-                chip(
-                  icon: playing
-                      ? Icons.play_arrow_rounded
-                      : Icons.pause_rounded,
-                  label: playing ? 'Reproduciendo' : 'En pausa',
-                  bg: playing ? cs.secondaryContainer : cs.surfaceContainerHigh,
-                  fg: playing ? cs.onSecondaryContainer : cs.onSurfaceVariant,
+                HxChip(
+                  icon: Symbols.tablet_android_rounded,
+                  label: '$cars conectada${cars == 1 ? '' : 's'}',
+                  on: cars > 0,
                 ),
-                chip(
-                  icon: lyricsIcon,
-                  label: lyricsLabel,
-                  bg: lyricsOk ? cs.tertiaryContainer : cs.surfaceContainerHigh,
-                  fg: lyricsOk ? cs.onTertiaryContainer : cs.onSurfaceVariant,
-                ),
+                if (port != null)
+                  HxChip(
+                    icon: Symbols.lan_rounded,
+                    label: 'Puerto $port',
+                    mono: true,
+                  ),
               ],
             ),
           ],
-        ),
+          const SizedBox(height: 14),
+          Opacity(
+            opacity: enabled || running ? 1 : 0.38,
+            child: HxBigButton(
+              checked: running,
+              onPressed: (enabled || running) && !busy ? onTap : null,
+              child: busy
+                  ? HxLoadingIndicator(size: 32, color: fg)
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        HxIcon(
+                          running
+                              ? Symbols.stop_rounded
+                              : Symbols.play_arrow_rounded,
+                          size: 30,
+                          filled: true,
+                          color: fg,
+                        ),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            running ? 'Detener' : 'Transmitir a la pantalla',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: hxText(
+                              16,
+                              weight: FontWeight.w500,
+                              height: 1.3,
+                              color: fg,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-class PermissionTile extends StatelessWidget {
-  const PermissionTile({
-    super.key,
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.granted,
-    this.onFix,
-  });
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final bool granted;
-  final VoidCallback? onFix;
+/// Aviso en el inicio cuando faltan permisos.
+class PermissionsBanner extends StatelessWidget {
+  const PermissionsBanner({super.key, required this.onReview});
+  final VoidCallback onReview;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      leading: TonalIcon(
-        icon: icon,
-        background: granted ? cs.primaryContainer : cs.errorContainer,
-        foreground: granted ? cs.onPrimaryContainer : cs.onErrorContainer,
-      ),
-      title: Text(title),
-      subtitle: Text(subtitle),
-      trailing: granted
-          ? Icon(Icons.check_circle_rounded, color: cs.primary)
-          : FilledButton.tonal(
-              onPressed: onFix,
-              style: FilledButton.styleFrom(
-                minimumSize: const Size(0, 40),
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                shape: const StadiumBorder(),
-              ),
-              child: const Text('Conceder'),
+    return HxCard(
+      color: cs.errorContainer,
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+      child: Row(
+        children: [
+          HxIcon(
+            Symbols.warning_rounded,
+            filled: true,
+            color: cs.onErrorContainer,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'Faltan permisos para leer la música.',
+              style: HxType.bodyM(cs.onErrorContainer),
             ),
+          ),
+          const SizedBox(width: 8),
+          HxButton(label: 'Revisar', onPressed: onReview),
+        ],
+      ),
     );
   }
 }
 
-class PermissionsCard extends StatelessWidget {
-  const PermissionsCard({super.key, required this.c});
-  final PhoneController c;
-
-  @override
-  Widget build(BuildContext context) => Card(
-    child: Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Column(
-        children: [
-          PermissionTile(
-            icon: Icons.notifications_active_rounded,
-            title: 'Acceso a notificaciones',
-            subtitle: 'Obligatorio: así se lee lo que suena',
-            granted: c.notificationAccess,
-            onFix: c.openNotificationSettings,
-          ),
-          PermissionTile(
-            icon: Icons.bluetooth_rounded,
-            title: 'Dispositivos cercanos',
-            subtitle: 'Bluetooth para el enlace sin Wi-Fi',
-            granted: c.bluetoothPermission,
-            onFix: c.requestPermissions,
-          ),
-          PermissionTile(
-            icon: Icons.notifications_rounded,
-            title: 'Notificaciones',
-            subtitle: 'Aviso del servicio en segundo plano',
-            granted: c.notificationsPermission,
-            onFix: c.requestPermissions,
-          ),
-        ],
-      ),
-    ),
-  );
-}
-
-class CarsCard extends StatelessWidget {
-  const CarsCard({super.key, required this.cars, required this.running});
+/// Lista de pantallas conectadas con filas al estilo `TrackRow`.
+class CarsList extends StatelessWidget {
+  const CarsList({super.key, required this.cars, required this.running});
   final List<ConnectedCar> cars;
   final bool running;
 
@@ -492,145 +420,167 @@ class CarsCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     if (cars.isEmpty) {
-      return Card(
-        child: ListTile(
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 8,
-          ),
-          leading: TonalIcon(
-            icon: Icons.tablet_android_rounded,
-            background: cs.surfaceContainerHighest,
-            foreground: cs.onSurfaceVariant,
-          ),
-          title: const Text('Ninguna pantalla conectada'),
-          subtitle: Text(
-            running
-                ? 'Abre Pixel Car Player en la tableta del carro.'
-                : 'Enciende el transmisor y abre la app en la tableta.',
-          ),
-        ),
+      return HxEmptyState(
+        icon: Symbols.tablet_android_rounded,
+        shape: M3Shape.cookie9,
+        title: 'Ninguna pantalla conectada',
+        text: running
+            ? 'Abre Pixel Car Player en la tableta del carro.'
+            : 'Enciende el transmisor y abre la app en la tableta.',
       );
     }
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: Column(
-          children: [
-            for (var i = 0; i < cars.length; i++) ...[
-              if (i > 0) const SizedBox(height: 4),
-              ListTile(
-                tileColor: cs.secondaryContainer,
-                textColor: cs.onSecondaryContainer,
-                iconColor: cs.onSecondaryContainer,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                leading: TonalIcon(
-                  icon: Icons.tablet_android_rounded,
-                  background: cs.secondary,
-                  foreground: cs.onSecondary,
-                ),
-                title: Text(cars[i].device),
-                subtitle: Text(
-                  '${cars[i].isBluetooth ? 'Bluetooth' : 'Wi-Fi'} · '
-                  '${cars[i].address}',
-                ),
-                trailing: Icon(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < cars.length; i++) ...[
+          if (i > 0) const SizedBox(height: 2),
+          HxListRow(
+            icon: Symbols.tablet_android_rounded,
+            title: cars[i].device,
+            subtitle:
+                '${cars[i].isBluetooth ? 'Bluetooth' : 'Wi-Fi'} · ${cars[i].address}',
+            current: true,
+            trailing: SizedBox.square(
+              dimension: 40,
+              child: Center(
+                child: HxIcon(
                   cars[i].isBluetooth
-                      ? Icons.bluetooth_connected_rounded
-                      : Icons.wifi_rounded,
+                      ? Symbols.bluetooth_connected_rounded
+                      : Symbols.wifi_rounded,
+                  size: 22,
+                  color: cs.onSecondaryContainer,
                 ),
               ),
-            ],
-          ],
-        ),
-      ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
 
-class HelpCard extends StatelessWidget {
-  const HelpCard({super.key, required this.ips, required this.port});
+/// Fila de permiso (elemento de Ajustes con estado o botón tonal "Conceder").
+class PermissionItem extends StatelessWidget {
+  const PermissionItem({
+    super.key,
+    required this.title,
+    required this.subtitle,
+    required this.granted,
+    this.onFix,
+  });
+  final String title;
+  final String subtitle;
+  final bool granted;
+  final VoidCallback? onFix;
+
+  @override
+  Widget build(BuildContext context) => HxSettingsItem(
+    label: title,
+    description: subtitle,
+    trailing: granted
+        ? const HxStatus(
+            label: 'Listo',
+            icon: Symbols.check_circle_rounded,
+            ok: true,
+          )
+        : HxButton(
+            label: 'Conceder',
+            kind: HxButtonKind.tonal,
+            onPressed: onFix,
+          ),
+  );
+}
+
+List<Widget> permissionItems(PhoneController c) => [
+  PermissionItem(
+    title: 'Acceso a notificaciones',
+    subtitle: 'Obligatorio: así se lee lo que suena.',
+    granted: c.notificationAccess,
+    onFix: c.openNotificationSettings,
+  ),
+  PermissionItem(
+    title: 'Dispositivos cercanos',
+    subtitle: 'Bluetooth para el enlace sin Wi-Fi.',
+    granted: c.bluetoothPermission,
+    onFix: c.requestPermissions,
+  ),
+  PermissionItem(
+    title: 'Notificaciones',
+    subtitle: 'Aviso del servicio en segundo plano.',
+    granted: c.notificationsPermission,
+    onFix: c.requestPermissions,
+  ),
+];
+
+/// "Cómo conectar": direcciones como chips (tocar = copiar) y consejos.
+class HelpItems extends StatelessWidget {
+  const HelpItems({super.key, required this.ips, required this.port});
   final List<String> ips;
   final int? port;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final t = Theme.of(context).textTheme;
 
-    Widget tip(IconData i, String s) => ListTile(
-      contentPadding: EdgeInsets.zero,
-      minVerticalPadding: 6,
-      leading: TonalIcon(
-        icon: i,
-        background: cs.tertiaryContainer,
-        foreground: cs.onTertiaryContainer,
-        size: 36,
+    Widget tip(IconData i, String s) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          HxIcon(i, size: 22, color: cs.primary),
+          const SizedBox(width: 16),
+          Expanded(child: Text(s, style: HxType.bodyM(cs.onSurfaceVariant))),
+        ],
       ),
-      title: Text(s, style: t.bodyMedium),
     );
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Si la tableta no encuentra este celular sola, escribe esta '
-              'dirección en ella:',
-              style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
-            ),
-            const SizedBox(height: 12),
-            if (ips.isEmpty)
-              Text(
-                'Sin red detectada (activa el hotspot o el Wi-Fi)',
-                style: t.bodySmall?.copyWith(color: cs.error),
-              )
-            else
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final ip in ips)
-                    ActionChip(
-                      avatar: Icon(Icons.copy_rounded, color: cs.primary),
-                      label: Text(port != null ? '$ip:$port' : ip),
-                      labelStyle: t.labelLarge?.copyWith(
-                        color: cs.onSurface,
-                        fontFeatures: const [FontFeature.tabularFigures()],
+    return HxSettingsCard(
+      children: [
+        HxSettingsItem(
+          label: 'Dirección de este celular',
+          description: 'Si la tableta no lo encuentra sola, escribe esta dirección en ella.',
+          child: ips.isEmpty
+              ? Text(
+                  'Sin red detectada (activa el hotspot o el Wi-Fi).',
+                  style: HxType.bodyM(cs.error),
+                )
+              : Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final ip in ips)
+                      HxChip(
+                        icon: Symbols.content_copy_rounded,
+                        label: port != null ? '$ip:$port' : ip,
+                        mono: true,
+                        tooltip: 'Copiar',
+                        onTap: () {
+                          Clipboard.setData(ClipboardData(text: ip));
+                          ScaffoldMessenger.of(context)
+                            ..hideCurrentSnackBar()
+                            ..showSnackBar(
+                              SnackBar(content: Text('Dirección copiada: $ip')),
+                            );
+                        },
                       ),
-                      tooltip: 'Copiar',
-                      onPressed: () {
-                        Clipboard.setData(ClipboardData(text: ip));
-                        ScaffoldMessenger.of(
-                          context,
-                        ).showSnackBar(SnackBar(content: Text('Copiado: $ip')));
-                      },
-                    ),
-                ],
-              ),
-            const SizedBox(height: 8),
-            tip(
-              Icons.wifi_tethering_rounded,
-              'Enciende el hotspot del celular y conecta la tableta a él '
-              '(o usen la misma red Wi-Fi).',
-            ),
-            tip(
-              Icons.bluetooth_audio_rounded,
-              'El audio sigue por Bluetooth como siempre; los datos van por '
-              'Wi-Fi.',
-            ),
-            tip(
-              Icons.bluetooth_connected_rounded,
-              'Enlace por Bluetooth: empareja ambos equipos y elige este '
-              'celular en los ajustes de la tableta.',
-            ),
-          ],
+                  ],
+                ),
         ),
-      ),
+        tip(
+          Symbols.wifi_tethering_rounded,
+          'Enciende el hotspot del celular y conecta la tableta a él (o usen la '
+          'misma red Wi-Fi).',
+        ),
+        tip(
+          Symbols.bluetooth_audio_rounded,
+          'El audio sigue por Bluetooth como siempre; los datos van por Wi-Fi.',
+        ),
+        tip(
+          Symbols.bluetooth_connected_rounded,
+          'Enlace por Bluetooth: empareja ambos equipos y elige este celular en '
+          'los ajustes de la tableta.',
+        ),
+      ],
     );
   }
 }

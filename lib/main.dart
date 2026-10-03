@@ -1,4 +1,3 @@
-import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pixel_car_player/car/car_root.dart';
@@ -32,31 +31,12 @@ class _PixelCarPlayerAppState extends State<PixelCarPlayerApp> {
     setState(() => _mode = mode);
   }
 
-  /// Color semilla del wallpaper (Material You, Android 12+). null = no disponible.
-  Color? _systemSeed;
-
   @override
   void initState() {
     super.initState();
     if (_mode == AppMode.car) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     }
-    _loadSystemSeed();
-  }
-
-  Future<void> _loadSystemSeed() async {
-    Color? seed;
-    try {
-      final palette = await DynamicColorPlugin.getCorePalette();
-      if (palette != null) {
-        seed = Color(palette.primary.get(40));
-      } else {
-        seed = await DynamicColorPlugin.getAccentColor();
-      }
-    } catch (_) {
-      seed = null; // Web / Android < 12: se usa la semilla Harmonix.
-    }
-    if (mounted && seed != null) setState(() => _systemSeed = seed);
   }
 
   @override
@@ -70,9 +50,9 @@ class _PixelCarPlayerAppState extends State<PixelCarPlayerApp> {
       AppMode.phone => PhoneRoot(onChangeMode: () => _setMode(null)),
       null => ModeSelectScreen(onSelected: _setMode),
     };
-    // Material You: esquema tonal desde el color del wallpaper (Android 12+);
-    // si no hay, desde la semilla Harmonix.
-    final seed = _systemSeed ?? AppTheme.fallbackSeed;
+    // Como Harmonix v2: el color sale de la portada que suena (cada pantalla envuelve
+    // su contenido en HxAnimatedTheme); aquí va el tema base con la semilla por defecto.
+    const seed = AppTheme.fallbackSeed;
     return MaterialApp(
       title: 'Pixel Car Player',
       debugShowCheckedModeBanner: false,

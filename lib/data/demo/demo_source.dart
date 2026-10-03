@@ -131,9 +131,9 @@ final demoTracks = <DemoTrack>[
   const DemoTrack(
     info: TrackInfo(
       id: 'demo-sea',
-      title: 'Mar de Fondo (Instrumental)',
-      artist: 'Aurora Costera',
-      album: 'Mareas',
+      title: 'Mar de Fondo',
+      artist: 'Bruma',
+      album: 'Costa',
       duration: Duration(minutes: 3, seconds: 5),
       source: 'com.spotify.music',
     ),
@@ -142,6 +142,22 @@ final demoTracks = <DemoTrack>[
     synced: false,
   ),
 ];
+
+/// Temas inventados que completan la cola de la demo (después de los de [demoTracks]).
+const demoQueueExtras = <QueueItem>[
+  QueueItem(title: 'Autopista del Sol', artist: 'Harmonix Band'),
+  QueueItem(title: 'Faros en la Niebla', artist: 'Bruma'),
+  QueueItem(title: 'Ventanas Abiertas', artist: 'Los Satélites del Sur'),
+  QueueItem(title: 'Medianoche en la Ruta 9', artist: 'Aurora Costera'),
+];
+
+/// Portada local de un tema de la demo (para la lista "A continuación").
+String? demoCoverFor(String title) {
+  for (final t in demoTracks) {
+    if (t.info.title == title) return t.coverAsset;
+  }
+  return null;
+}
 
 /// Simula un celular transmitiendo: emite los mismos [LinkMessage] que el
 /// enlace real y acepta los mismos comandos.
@@ -209,6 +225,14 @@ class DemoSource {
     _out.add(TrackMessage(t.info));
     _emitState();
     _out.add(LyricsMessage(id: t.info.id, status: LyricsStatus.loading));
+    _out.add(QueueMessage([
+      for (var k = 1; k < demoTracks.length; k++)
+        QueueItem(
+          title: demoTracks[(_index + k) % demoTracks.length].info.title,
+          artist: demoTracks[(_index + k) % demoTracks.length].info.artist,
+        ),
+      ...demoQueueExtras,
+    ]));
     try {
       final bytes = _artCache[t.coverAsset] ??= (await rootBundle.load(t.coverAsset)).buffer
           .asUint8List();

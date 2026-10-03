@@ -1,205 +1,272 @@
 import 'package:flutter/material.dart';
+import 'package:material_symbols_icons/symbols.dart';
 import 'package:pixel_car_player/core/app_mode.dart';
+import 'package:pixel_car_player/core/shapes/m3_shapes.dart';
+import 'package:pixel_car_player/core/theme/app_theme.dart';
+import 'package:pixel_car_player/phone/widgets/hx/hx.dart';
 
-/// Selección de rol al primer arranque (Material Design 3 / Material You).
+/// Selección de rol al primer arranque, con el aspecto de Harmonix v2: formas de fondo,
+/// ícono en una forma cookie9, saludo grande y dos tarjetas como las de "Escuchado hace
+/// poco".
 class ModeSelectScreen extends StatelessWidget {
   const ModeSelectScreen({super.key, required this.onSelected});
   final ValueChanged<AppMode> onSelected;
 
   @override
   Widget build(BuildContext context) {
+    final scheme = AppTheme.schemeFromSeed(
+      AppTheme.fallbackSeed,
+      brightness: Theme.of(context).brightness,
+    );
+    return HxAnimatedTheme(
+      scheme: scheme,
+      child: Builder(builder: _build),
+    );
+  }
+
+  Widget _build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final t = Theme.of(context).textTheme;
     return Scaffold(
-      body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, c) {
-            final wide = c.maxWidth >= 720;
-            final compactHeight = c.maxHeight < 680;
-            final tile = compactHeight ? 72.0 : 96.0;
+      backgroundColor: cs.surface,
+      body: Stack(
+        children: [
+          const Positioned.fill(child: HxBackgroundShapes()),
+          SafeArea(
+            child: LayoutBuilder(
+              builder: (context, c) {
+                final wide = c.maxWidth >= 720;
+                final compact = c.maxHeight < 800;
+                final tile = compact ? 80.0 : 112.0;
+                final titleSize = wide && !compact
+                    ? 57.0
+                    : (wide ? 45.0 : 40.0);
 
-            final cards = [
-              _ModeCard(
-                wide: wide,
-                icon: Icons.tablet_android_rounded,
-                title: 'Pantalla del carro (tableta)',
-                description: 'Muestra portada, letras y controles en grande.',
-                background: cs.primaryContainer,
-                foreground: cs.onPrimaryContainer,
-                accent: cs.primary,
-                onAccent: cs.onPrimary,
-                onTap: () => onSelected(AppMode.car),
-              ),
-              _ModeCard(
-                wide: wide,
-                icon: Icons.phone_android_rounded,
-                title: 'Transmisor (celular con Spotify)',
-                description: 'Lee Spotify y envía todo a la tableta del carro.',
-                background: cs.tertiaryContainer,
-                foreground: cs.onTertiaryContainer,
-                accent: cs.tertiary,
-                onAccent: cs.onTertiary,
-                onTap: () => onSelected(AppMode.phone),
-              ),
-            ];
-
-            final header = Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: tile,
-                  height: tile,
-                  decoration: BoxDecoration(
-                    color: cs.primaryContainer,
-                    borderRadius: BorderRadius.circular(28),
+                final cards = [
+                  _ModeCard(
+                    shapeColor: cs.primaryContainer,
+                    iconColor: cs.onPrimaryContainer,
+                    icon: Symbols.tablet_android_rounded,
+                    title: 'Pantalla del carro (tableta)',
+                    description:
+                        'Muestra portada, letras y controles en grande.',
+                    compact: compact,
+                    stretch: wide,
+                    onTap: () => onSelected(AppMode.car),
                   ),
-                  child: Icon(
-                    Icons.directions_car_rounded,
-                    color: cs.onPrimaryContainer,
-                    size: tile * 0.5,
+                  _ModeCard(
+                    shapeColor: cs.tertiaryContainer,
+                    iconColor: cs.onTertiaryContainer,
+                    icon: Symbols.phone_android_rounded,
+                    title: 'Transmisor (celular con Spotify)',
+                    description:
+                        'Lee Spotify y envía todo a la tableta del carro.',
+                    compact: compact,
+                    stretch: wide,
+                    onTap: () => onSelected(AppMode.phone),
                   ),
-                ),
-                SizedBox(height: compactHeight ? 16 : 24),
-                Text(
-                  'Pixel Car Player',
-                  style: (wide && !compactHeight)
-                      ? t.displaySmall
-                      : t.headlineMedium,
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  '¿Qué será este dispositivo? Puedes cambiarlo después '
-                  'desde el menú.',
-                  style: t.bodyLarge?.copyWith(color: cs.onSurfaceVariant),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            );
+                ];
 
-            final body = wide
-                ? IntrinsicHeight(
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Expanded(child: cards[0]),
-                        const SizedBox(width: 16),
-                        Expanded(child: cards[1]),
-                      ],
+                final header = Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    HxShapeTile(
+                      shape: M3Shape.cookie9,
+                      size: tile,
+                      color: cs.primaryContainer,
+                      icon: Symbols.directions_car_rounded,
+                      iconColor: cs.onPrimaryContainer,
+                      iconSize: tile * 0.43,
+                      spin: true,
                     ),
-                  )
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [cards[0], const SizedBox(height: 12), cards[1]],
-                  );
+                    SizedBox(height: compact ? 16 : 24),
+                    Text(
+                      'Pixel Car Player',
+                      style: HxType.greeting(titleSize, cs.onSurface),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      '¿Qué será este dispositivo? Puedes cambiarlo después '
+                      'desde el menú.',
+                      style: HxType.bodyL(cs.onSurfaceVariant),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                );
 
-            const pad = EdgeInsets.symmetric(horizontal: 24, vertical: 24);
-            return SingleChildScrollView(
-              padding: pad,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  minHeight: (c.maxHeight - pad.vertical).clamp(
-                    0,
-                    double.infinity,
-                  ),
-                ),
-                child: Center(
+                final body = wide
+                    ? IntrinsicHeight(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Expanded(child: cards[0]),
+                            const SizedBox(width: 12),
+                            Expanded(child: cards[1]),
+                          ],
+                        ),
+                      )
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          cards[0],
+                          const SizedBox(height: 12),
+                          cards[1],
+                        ],
+                      );
+
+                final pad = EdgeInsets.symmetric(
+                  horizontal: wide ? 32 : 16,
+                  vertical: compact ? 20 : 32,
+                );
+                return SingleChildScrollView(
+                  padding: pad,
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 880),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        header,
-                        SizedBox(height: compactHeight ? 24 : 40),
-                        body,
-                      ],
+                    constraints: BoxConstraints(
+                      minHeight: (c.maxHeight - pad.vertical).clamp(
+                        0,
+                        double.infinity,
+                      ),
+                    ),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 860),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            header,
+                            SizedBox(height: compact ? 24 : 40),
+                            body,
+                          ],
+                        ),
+                      ),
                     ),
                   ),
-                ),
-              ),
-            );
-          },
-        ),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-class _ModeCard extends StatelessWidget {
+/// Tarjeta de modo (`SearchView .card`): surfaceContainer, radio 28 (16 al presionar);
+/// la forma pasa de cuadrado redondeado a cookie al pasar el mouse o presionar.
+class _ModeCard extends StatefulWidget {
   const _ModeCard({
-    required this.wide,
+    required this.shapeColor,
+    required this.iconColor,
     required this.icon,
     required this.title,
     required this.description,
-    required this.background,
-    required this.foreground,
-    required this.accent,
-    required this.onAccent,
+    required this.compact,
+    required this.stretch,
     required this.onTap,
   });
-  final bool wide;
+  final Color shapeColor;
+  final Color iconColor;
   final IconData icon;
   final String title;
   final String description;
-  final Color background;
-  final Color foreground;
-  final Color accent;
-  final Color onAccent;
+  final bool compact;
+  final bool stretch;
   final VoidCallback onTap;
 
   @override
+  State<_ModeCard> createState() => _ModeCardState();
+}
+
+class _ModeCardState extends State<_ModeCard> with HxPressState {
+  bool _hover = false;
+
+  @override
   Widget build(BuildContext context) {
-    final t = Theme.of(context).textTheme;
-    return Card(
-      color: background,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-      child: InkWell(
-        onTap: onTap,
+    final cs = Theme.of(context).colorScheme;
+    final art = widget.stretch ? (widget.compact ? 104.0 : 136.0) : 88.0;
+    final morph = _hover || pressed;
+    final artTile = TweenAnimationBuilder<double>(
+      tween: Tween(end: morph ? 1 : 0),
+      duration: HxMotion.dSpring,
+      curve: HxMotion.spring,
+      builder: (context, t, child) => ClipPath(
+        clipper: M3ShapeClipper(
+          M3Shape.lerp(M3Shape.square, M3Shape.cookie12, t),
+        ),
+        child: child,
+      ),
+      child: Container(
+        width: art,
+        height: art,
+        color: widget.shapeColor,
+        alignment: Alignment.center,
+        child: HxIcon(
+          widget.icon,
+          size: art * 0.4,
+          filled: true,
+          color: widget.iconColor,
+        ),
+      ),
+    );
+    final texts = [
+      Text(widget.title, style: HxType.titleL(cs.onSurface)),
+      const SizedBox(height: 2),
+      Text(widget.description, style: HxType.bodyM(cs.onSurfaceVariant)),
+    ];
+    final button = Align(
+      alignment: Alignment.centerRight,
+      child: HxButton(
+        label: 'Elegir',
+        trailingIcon: Symbols.arrow_forward_rounded,
+        onPressed: widget.onTap,
+      ),
+    );
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: HxSurface(
+        onTap: widget.onTap,
+        onHighlightChanged: setPressed,
+        color: cs.surfaceContainer,
+        contentColor: cs.onSurface,
+        duration: HxMotion.dFx,
+        shape: RoundedRectangleBorder(
+          borderRadius: pressed ? HxRadius.l : HxRadius.xl,
+        ),
         child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 56,
-                height: 56,
-                decoration: BoxDecoration(
-                  color: accent,
-                  borderRadius: BorderRadius.circular(16),
+          padding: const EdgeInsets.all(20),
+          child: widget.stretch
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    artTile,
+                    const SizedBox(height: 16),
+                    ...texts,
+                    const SizedBox(height: 20),
+                    const Spacer(),
+                    button,
+                  ],
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        artTile,
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: texts,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    button,
+                  ],
                 ),
-                child: Icon(icon, color: onAccent, size: 28),
-              ),
-              const SizedBox(height: 20),
-              Text(title, style: t.titleLarge?.copyWith(color: foreground)),
-              const SizedBox(height: 6),
-              Text(
-                description,
-                style: t.bodyMedium?.copyWith(
-                  color: foreground.withValues(alpha: 0.8),
-                ),
-              ),
-              if (wide) const Spacer() else const SizedBox(height: 20),
-              if (wide) const SizedBox(height: 20),
-              Align(
-                alignment: Alignment.centerRight,
-                child: FilledButton.icon(
-                  onPressed: onTap,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: accent,
-                    foregroundColor: onAccent,
-                    shape: const StadiumBorder(),
-                    minimumSize: const Size(0, 48),
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                  ),
-                  iconAlignment: IconAlignment.end,
-                  icon: const Icon(Icons.arrow_forward_rounded),
-                  label: const Text('Elegir'),
-                ),
-              ),
-            ],
-          ),
         ),
       ),
     );

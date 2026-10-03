@@ -56,8 +56,7 @@ class _CarRootState extends State<CarRoot> {
       child: CarPlayerScreen(
         initialLyricsFullscreen: kIsWeb && Uri.base.queryParameters['lyrics'] == '1',
         // El context recibido ya tiene el tema Material You de la carátula.
-        onSettings: (themed) =>
-            showCarSettings(themed, controller: c, onChangeMode: widget.onChangeMode),
+        onSettings: (themed) => showCarSettings(themed, controller: c, onChangeMode: widget.onChangeMode),
       ),
     );
   }

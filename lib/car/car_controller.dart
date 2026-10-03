@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart' show ColorScheme, MemoryImage;
+import 'package:flutter/material.dart' show ColorScheme;
 import 'package:pixel_car_player/car/lyrics/lrclib_client.dart';
 import 'package:pixel_car_player/core/models/now_playing.dart';
 import 'package:pixel_car_player/core/theme/app_theme.dart';
@@ -60,10 +60,10 @@ class CarController extends ChangeNotifier {
   final DemoSource Function() _demoFactory;
   final Future<ColorScheme> Function(Uint8List artwork) _schemeBuilder;
 
-  /// Esquema Material You (oscuro) generado desde una carátula, igual que el
-  /// reproductor multimedia de Android 12+.
-  static Future<ColorScheme> schemeFromArtwork(Uint8List bytes) =>
-      AppTheme.schemeFromImage(MemoryImage(bytes));
+  /// Esquema Tonal Spot (oscuro) generado desde una carátula, igual que Harmonix v2
+  /// (`seedFromImage` → `applySeed`).
+  static Future<ColorScheme> schemeFromArtwork(Uint8List bytes) async =>
+      AppTheme.schemeFromSeed(await AppTheme.seedFromImageBytes(bytes));
 
   /// Esquema cuando no hay carátula.
   static final ColorScheme fallbackScheme = AppTheme.schemeFromSeed(AppTheme.fallbackSeed);
@@ -77,6 +77,7 @@ class CarController extends ChangeNotifier {
   // ---- Estado ----
   NowPlaying _remote = const NowPlaying(); // celular o demo
   NowPlaying _local = const NowPlaying();
+  List<QueueItem> _queue = const [];
   String? _remoteDevice;
   String? _remoteSource;
   ColorScheme _scheme = fallbackScheme;
@@ -102,11 +103,7 @@ class CarController extends ChangeNotifier {
 
   /// Estado del enlace a mostrar (en demo se finge conectado).
   LinkStatus get displayStatus => demo
-      ? LinkStatus.connected(
-          device: _remoteDevice ?? 'Pixel 8 (demo)',
-          transport: 'wifi',
-          address: 'demo',
-        )
+      ? LinkStatus.connected(device: _remoteDevice ?? 'Pixel 8 (demo)', transport: 'wifi', address: 'demo')
       : link.status.value;
 
   CarSource get source {
@@ -122,9 +119,14 @@ class CarController extends ChangeNotifier {
     CarSource.none => const NowPlaying(),
   };
 
+  /// Próximos temas que mandó el celular (vacío si no hay o no llegó `queue`).
+  List<QueueItem> get queue => switch (source) {
+    CarSource.phone || CarSource.demo => _queue,
+    _ => const [],
+  };
+
   /// Paquete de la app de música (`com.spotify.music`…).
-  String? get sourcePackage =>
-      source == CarSource.local ? _localPackage : (nowPlaying.track?.source ?? _remoteSource);
+  String? get sourcePackage => source == CarSource.local ? _localPackage : (nowPlaying.track?.source ?? _remoteSource);
 
   /// Esquema de color actual (de la carátula que suena).
   ColorScheme get scheme => _scheme;
@@ -177,6 +179,7 @@ class CarController extends ChangeNotifier {
     prefs.demo = on;
     unawaited(prefs.save());
     _remote = const NowPlaying();
+    _queue = const [];
     if (on) {
       await link.stop();
       await _startDemo();
@@ -220,6 +223,7 @@ class CarController extends ChangeNotifier {
         _remoteDevice = st.device;
       } else {
         _remote = const NowPlaying();
+        _queue = const [];
       }
     }
     _changed();
@@ -257,6 +261,9 @@ class CarController extends ChangeNotifier {
       case LyricsMessage(:final id, :final status, :final synced, :final lines):
         if (id != _remote.track?.id) return;
         _remote = _remote.copyWith(lyrics: lines, lyricsSynced: synced, lyricsStatus: status);
+      case QueueMessage(:final items):
+        if (listEquals(items, _queue)) return;
+        _queue = List.unmodifiable(items);
       case PingMessage() || BeaconMessage() || UnknownMessage():
         return;
     }
@@ -322,12 +329,7 @@ class CarController extends ChangeNotifier {
     if (_lyricsRequestedFor == t.id) return;
     _lyricsRequestedFor = t.id;
     final client = _lrclib ??= LrcLibClient();
-    final r = await client.fetch(
-      title: t.title,
-      artist: t.artist,
-      album: t.album,
-      duration: t.duration,
-    );
+    final r = await client.fetch(title: t.title, artist: t.artist, album: t.album, duration: t.duration);
     if (_disposed || _local.track?.id != t.id) return;
     _local = _local.copyWith(lyrics: r.lines, lyricsSynced: r.synced, lyricsStatus: r.status);
     _changed();
@@ -360,21 +362,9 @@ class CarController extends ChangeNotifier {
     NowPlaying update(NowPlaying np) {
       final now = DateTime.now();
       return switch (action) {
-        LinkAction.play => np.copyWith(
-          playing: true,
-          position: np.livePosition(now),
-          positionAt: now,
-        ),
-        LinkAction.pause => np.copyWith(
-          playing: false,
-          position: np.livePosition(now),
-          positionAt: now,
-        ),
-        LinkAction.toggle => np.copyWith(
-          playing: !np.playing,
-          position: np.livePosition(now),
-          positionAt: now,
-        ),
+        LinkAction.play => np.copyWith(playing: true, position: np.livePosition(now), positionAt: now),
+        LinkAction.pause => np.copyWith(playing: false, position: np.livePosition(now), positionAt: now),
+        LinkAction.toggle => np.copyWith(playing: !np.playing, position: np.livePosition(now), positionAt: now),
         LinkAction.seek => np.copyWith(
           position: Duration(milliseconds: positionMs ?? 0),
           positionAt: now,
@@ -429,18 +419,20 @@ class CarController extends ChangeNotifier {
       _scheme = cached;
       return;
     }
-    _schemeBuilder(art).then((s) {
-      if (_disposed) return;
-      _schemeCache[key] = s;
-      while (_schemeCache.length > _schemeCacheSize) {
-        _schemeCache.remove(_schemeCache.keys.first);
-      }
-      if (!identical(_schemeFor, art)) return;
-      _scheme = s;
-      notifyListeners();
-    }).catchError((Object e) {
-      debugPrint('schemeFromArtwork: $e');
-    });
+    _schemeBuilder(art)
+        .then((s) {
+          if (_disposed) return;
+          _schemeCache[key] = s;
+          while (_schemeCache.length > _schemeCacheSize) {
+            _schemeCache.remove(_schemeCache.keys.first);
+          }
+          if (!identical(_schemeFor, art)) return;
+          _scheme = s;
+          notifyListeners();
+        })
+        .catchError((Object e) {
+          debugPrint('schemeFromArtwork: $e');
+        });
   }
 
   @override
