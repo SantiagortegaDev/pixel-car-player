@@ -1,0 +1,135 @@
+name: Build & Release APK (Beta)
+
+on:
+  push:
+    branches: [ main, 'claude/**' ]
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: 'Etiqueta de versión (opcional). Ej: v1.0.0-beta.1'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Beta APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Download Android keystore (opcional)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 --decode > android/app/keystore.jks
+            echo "KEYSTORE_FILE=keystore.jks" >> $GITHUB_ENV
+          fi
+
+      - name: Configure signing (opcional)
+        env:
+          KEYSTORE_PATH: ${{ env.KEYSTORE_FILE }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -n "$KEYSTORE_PATH" ]; then
+            cat > android/key.properties <<EOF
+          storeFile=$KEYSTORE_PATH
+          storePassword=$STORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          EOF
+          fi
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze (no bloqueante)
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings || true
+
+      - name: Test
+        run: flutter test
+
+      - name: Compute version tag
+        id: version
+        run: |
+          if [ -n "${{ inputs.version_tag }}" ]; then
+            echo "tag=${{ inputs.version_tag }}" >> $GITHUB_OUTPUT
+          else
+            TS=$(date +'%Y%m%d-%H%M%S')
+            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+            echo "tag=beta-${TS}-${SHORT_SHA}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build APK (release)
+        run: flutter build apk --release --no-tree-shake-icons
+
+      - name: Rename APK
+        run: |
+          mkdir -p output
+          cp build/app/outputs/flutter-apk/app-release.apk \
+            output/pixel-car-player-${{ steps.version.outputs.tag }}.apk
+
+      - name: Generate release notes
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          cat > output/release-notes.md <<EOF
+          # Pixel Car Player ${TAG}
+
+          Build automático desde la rama \`${{ github.ref_name }}\` (commit ${{ github.sha }}).
+
+          ## Cómo instalar
+          1. Descarga el archivo \`.apk\` de abajo (el mismo APK sirve para celular y tableta).
+          2. En cada Android, activa "Instalar apps de origen desconocido".
+          3. Abre el APK, confirma la instalación y elige el modo:
+             **Transmisor** en el celular, **Pantalla del carro** en la tableta.
+
+          > Build **Beta**. Puede contener bugs.
+
+          EOF
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixel-car-player-apk
+          path: output/*.apk
+          retention-days: 30
+
+      - name: Create GitHub Release (Beta)
+        if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Pixel Car Player ${{ steps.version.outputs.tag }}
+          body_path: output/release-notes.md
+          files: output/*.apk
+          prerelease: true
+          draft: false
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
