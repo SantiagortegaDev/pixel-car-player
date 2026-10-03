@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:pixel_car_player/car/color/artwork_palette.dart';
 
 /// Escala de la UI según el tamaño de la pantalla del carro. 1.0 ≈ 1280×720.
 double carScaleFor(Size size) {
@@ -7,24 +6,38 @@ double carScaleFor(Size size) {
   return s.clamp(0.74, 1.8);
 }
 
-/// Datos visuales compartidos por toda la pantalla del carro: escala y paleta
-/// (ya animada) extraída de la carátula.
+/// Escala compartida por toda la pantalla del carro. Los colores NO viven
+/// aquí: salen siempre de `Theme.of(context).colorScheme` (Material You
+/// generado desde la carátula).
 class CarScope extends InheritedWidget {
-  const CarScope({super.key, required this.scale, required this.palette, required super.child});
+  const CarScope({super.key, required this.scale, required super.child});
 
   final double scale;
-  final ArtworkPalette palette;
 
   static CarScope of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<CarScope>()!;
 
   @override
-  bool updateShouldNotify(CarScope old) => old.scale != scale || old.palette != palette;
+  bool updateShouldNotify(CarScope old) => old.scale != scale;
 }
 
 extension CarScopeX on BuildContext {
   double get s => CarScope.of(this).scale;
-  ArtworkPalette get palette => CarScope.of(this).palette;
+  ColorScheme get cs => Theme.of(this).colorScheme;
+  TextTheme get tt => Theme.of(this).textTheme;
+}
+
+extension ScaledTextStyle on TextStyle? {
+  /// Estilo M3 del tema escalado para la pantalla del carro.
+  TextStyle scaled(double k, {Color? color, FontWeight? weight, double? height}) {
+    final base = this ?? const TextStyle(fontSize: 14);
+    return base.copyWith(
+      fontSize: (base.fontSize ?? 14) * k,
+      color: color,
+      fontWeight: weight,
+      height: height,
+    );
+  }
 }
 
 /// Tamaño táctil mínimo para usar manejando.

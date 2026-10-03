@@ -1,9 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:pixel_car_player/car/color/artwork_palette.dart';
+import 'package:flutter/material.dart' show ColorScheme, MemoryImage;
 import 'package:pixel_car_player/car/lyrics/lrclib_client.dart';
 import 'package:pixel_car_player/core/models/now_playing.dart';
+import 'package:pixel_car_player/core/theme/app_theme.dart';
 import 'package:pixel_car_player/data/bridge/native_bridge.dart';
 import 'package:pixel_car_player/data/demo/demo_source.dart';
 import 'package:pixel_car_player/data/link/car_link_client.dart';
@@ -38,9 +39,11 @@ class CarController extends ChangeNotifier {
     NativeBridge? bridge,
     LrcLibClient? lrclib,
     DemoSource Function()? demoFactory,
+    Future<ColorScheme> Function(Uint8List artwork)? schemeBuilder,
   }) : _bridge = bridge ?? NativeBridge.instance,
        prefs = prefs ?? CarPrefs(demo: demo),
-       _demoFactory = demoFactory ?? DemoSource.fromUrl {
+       _demoFactory = demoFactory ?? DemoSource.fromUrl,
+       _schemeBuilder = schemeBuilder ?? schemeFromArtwork {
     _lrclib = lrclib;
     this.prefs.demo = demo || this.prefs.demo;
     this.link =
@@ -55,6 +58,15 @@ class CarController extends ChangeNotifier {
 
   final NativeBridge _bridge;
   final DemoSource Function() _demoFactory;
+  final Future<ColorScheme> Function(Uint8List artwork) _schemeBuilder;
+
+  /// Esquema Material You (oscuro) generado desde una carátula, igual que el
+  /// reproductor multimedia de Android 12+.
+  static Future<ColorScheme> schemeFromArtwork(Uint8List bytes) =>
+      AppTheme.schemeFromImage(MemoryImage(bytes));
+
+  /// Esquema cuando no hay carátula.
+  static final ColorScheme fallbackScheme = AppTheme.schemeFromSeed(AppTheme.fallbackSeed);
   LrcLibClient? _lrclib;
   late final CarLinkClient link;
   CarPrefs prefs;
@@ -67,8 +79,10 @@ class CarController extends ChangeNotifier {
   NowPlaying _local = const NowPlaying();
   String? _remoteDevice;
   String? _remoteSource;
-  ArtworkPalette _palette = ArtworkPalette.harmonix;
-  Uint8List? _paletteFor;
+  ColorScheme _scheme = fallbackScheme;
+  Uint8List? _schemeFor;
+  final Map<String, ColorScheme> _schemeCache = {};
+  static const _schemeCacheSize = 24;
   List<String> tabletIps = const [];
 
   final ValueNotifier<Duration> position = ValueNotifier(Duration.zero);
@@ -112,7 +126,8 @@ class CarController extends ChangeNotifier {
   String? get sourcePackage =>
       source == CarSource.local ? _localPackage : (nowPlaying.track?.source ?? _remoteSource);
 
-  ArtworkPalette get palette => _palette;
+  /// Esquema de color actual (de la carátula que suena).
+  ColorScheme get scheme => _scheme;
 
   // ---------------------------------------------------------------------------
 
@@ -391,22 +406,41 @@ class CarController extends ChangeNotifier {
   void _changed() {
     if (_disposed) return;
     _tick();
-    final art = nowPlaying.artwork;
-    if (!identical(art, _paletteFor)) {
-      _paletteFor = art;
-      if (art == null) {
-        // Se conserva el color anterior hasta que llegue otra carátula,
-        // salvo que ya no haya nada que mostrar.
-        if (nowPlaying.track == null) _palette = ArtworkPalette.harmonix;
-      } else {
-        extractPalette(art).then((p) {
-          if (_disposed || !identical(_paletteFor, art)) return;
-          _palette = p;
-          notifyListeners();
-        });
-      }
-    }
+    _updateScheme();
     notifyListeners();
+  }
+
+  /// Calcula (o toma de la caché por pista) el esquema de la carátula.
+  void _updateScheme() {
+    final np = nowPlaying;
+    final art = np.artwork;
+    if (identical(art, _schemeFor)) return;
+    _schemeFor = art;
+    if (art == null) {
+      // Se conserva el color anterior hasta que llegue otra carátula,
+      // salvo que ya no haya nada que mostrar.
+      if (np.track == null) _scheme = fallbackScheme;
+      return;
+    }
+    final key = '${np.track?.id}#${art.length}';
+    final cached = _schemeCache.remove(key);
+    if (cached != null) {
+      _schemeCache[key] = cached; // LRU: al final.
+      _scheme = cached;
+      return;
+    }
+    _schemeBuilder(art).then((s) {
+      if (_disposed) return;
+      _schemeCache[key] = s;
+      while (_schemeCache.length > _schemeCacheSize) {
+        _schemeCache.remove(_schemeCache.keys.first);
+      }
+      if (!identical(_schemeFor, art)) return;
+      _scheme = s;
+      notifyListeners();
+    }).catchError((Object e) {
+      debugPrint('schemeFromArtwork: $e');
+    });
   }
 
   @override

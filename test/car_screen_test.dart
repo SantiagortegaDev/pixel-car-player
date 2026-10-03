@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pixel_car_player/car/car_controller.dart';
 import 'package:pixel_car_player/car/car_player_screen.dart';
+import 'package:pixel_car_player/car/car_settings_sheet.dart';
 import 'package:pixel_car_player/core/models/now_playing.dart';
 import 'package:pixel_car_player/core/theme/app_theme.dart';
 import 'package:pixel_car_player/data/demo/demo_source.dart';
@@ -19,10 +20,10 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(MaterialApp(
-      theme: HarmonixTheme.dark(),
+      theme: AppTheme.dark(),
       home: ChangeNotifierProvider<CarController>.value(
         value: c,
-        child: CarPlayerScreen(onSettings: () {}, initialLyricsFullscreen: lyrics),
+        child: CarPlayerScreen(onSettings: (_) {}, initialLyricsFullscreen: lyrics),
       ),
     ));
     await tester.pump(const Duration(seconds: 2));
@@ -76,6 +77,43 @@ void main() {
           lines: [for (final l in t.lyrics) LyricLine(Duration.zero, l.text)]));
       await pumpScreen(tester, size, c);
       expect(find.text('Letra sin sincronizar'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+    });
+
+    testWidgets('pausado $label', (tester) async {
+      final c = CarController(demo: true);
+      feed(c, demoTracks[1]);
+      c.apply(const StateMessage(playing: false, position: Duration(seconds: 20)));
+      await pumpScreen(tester, size, c);
+      expect(find.bySemanticsLabel('Reproducir'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+    });
+
+    testWidgets('ajustes $label', (tester) async {
+      final c = CarController(demo: true);
+      feed(c, demoTracks.first);
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.dark(),
+        home: ChangeNotifierProvider<CarController>.value(
+          value: c,
+          child: CarPlayerScreen(
+            onSettings: (ctx) => showCarSettings(ctx, controller: c, onChangeMode: () {}),
+          ),
+        ),
+      ));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.tap(find.byTooltip('Ajustes'));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.text('Ajustes'), findsWidgets);
+      expect(find.text('Wi-Fi'), findsOneWidget);
+      await tester.tap(find.text('Bluetooth'));
+      await tester.pump(const Duration(milliseconds: 500));
       await tester.pumpWidget(const SizedBox());
       c.dispose();
     });

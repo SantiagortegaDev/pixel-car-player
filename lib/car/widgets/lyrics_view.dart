@@ -1,12 +1,10 @@
-import 'package:flutter/foundation.dart';
-
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:pixel_car_player/car/widgets/car_scope.dart';
 import 'package:pixel_car_player/core/models/now_playing.dart';
-import 'package:pixel_car_player/core/theme/colors.dart';
 
 /// Panel de letras: elige la vista según el estado (sincronizadas, texto
 /// estático, buscando, no disponible).
@@ -192,11 +190,11 @@ class _SyncedLyricsViewState extends State<SyncedLyricsView> {
   @override
   Widget build(BuildContext context) {
     final s = context.s;
-    final p = context.palette;
+    final cs = context.cs;
     final fs = widget.fullscreen;
     final active = widget.lyricIndex.value;
-    final activeSize = (fs ? 56.0 : 34.0) * s;
-    final idleSize = (fs ? 34.0 : 24.0) * s;
+    final activeSize = (fs ? 56.0 : 32.0) * s;
+    final idleSize = (fs ? 34.0 : 23.0) * s;
     final align = fs ? TextAlign.center : TextAlign.left;
 
     return LayoutBuilder(
@@ -220,7 +218,7 @@ class _SyncedLyricsViewState extends State<SyncedLyricsView> {
                 crossAxisAlignment: fs ? CrossAxisAlignment.center : CrossAxisAlignment.start,
                 children: [
                   for (var i = 0; i < widget.lines.length; i++)
-                    _line(i, active, activeSize, idleSize, align, p.accentBright, s),
+                    _line(i, active, activeSize, idleSize, align, cs, s),
                 ],
               ),
             ),
@@ -236,14 +234,14 @@ class _SyncedLyricsViewState extends State<SyncedLyricsView> {
     double activeSize,
     double idleSize,
     TextAlign align,
-    Color activeColor,
+    ColorScheme cs,
     double s,
   ) {
     final line = widget.lines[i];
     final isActive = i == active;
     final dist = (i - active).abs();
     final past = active >= 0 && i < active;
-    final idleAlpha = (past ? 0.42 : 0.72) - (dist > 3 ? 0.12 : 0);
+    final idleAlpha = (past ? 0.5 : 0.8) - (dist > 3 ? 0.15 : 0);
     final text = line.isGap ? '♪' : line.text;
     final fs = widget.fullscreen;
 
@@ -258,7 +256,8 @@ class _SyncedLyricsViewState extends State<SyncedLyricsView> {
         start: line.time,
         end: end,
         livePosition: widget.livePosition,
-        sungColor: activeColor,
+        sungColor: cs.primary,
+        unsungColor: cs.onSurface.withValues(alpha: 0.5),
       );
     }
 
@@ -268,15 +267,14 @@ class _SyncedLyricsViewState extends State<SyncedLyricsView> {
       child: AnimatedDefaultTextStyle(
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeOutCubic,
-        style: TextStyle(
-          fontFamily: 'Roboto',
+        style: (Theme.of(context).textTheme.headlineSmall ?? const TextStyle()).copyWith(
           color: isActive
-              ? (fs ? Colors.white : activeColor)
-              : HarmonixColors.textSecondary.withValues(alpha: idleAlpha),
+              ? (fs ? cs.onSurface : cs.primary)
+              : cs.onSurfaceVariant.withValues(alpha: idleAlpha),
           fontSize: isActive ? activeSize : idleSize,
-          fontWeight: isActive ? FontWeight.w800 : FontWeight.w600,
+          fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
           height: 1.25,
-          letterSpacing: isActive ? -0.4 : -0.1,
+          letterSpacing: 0,
         ),
         child: content,
       ),
@@ -294,6 +292,7 @@ class _KaraokeText extends StatefulWidget {
     required this.end,
     required this.livePosition,
     required this.sungColor,
+    required this.unsungColor,
   });
 
   final String text;
@@ -302,6 +301,7 @@ class _KaraokeText extends StatefulWidget {
   final Duration end;
   final Duration Function() livePosition;
   final Color sungColor;
+  final Color unsungColor;
 
   @override
   State<_KaraokeText> createState() => _KaraokeTextState();
@@ -341,12 +341,7 @@ class _KaraokeTextState extends State<_KaraokeText> with SingleTickerProviderSta
     return ShaderMask(
       blendMode: BlendMode.srcIn,
       shaderCallback: (r) => LinearGradient(
-        colors: [
-          widget.sungColor,
-          Color.lerp(widget.sungColor, Colors.white, 0.35)!,
-          Colors.white.withValues(alpha: 0.55),
-          Colors.white.withValues(alpha: 0.55),
-        ],
+        colors: [widget.sungColor, widget.sungColor, widget.unsungColor, widget.unsungColor],
         stops: [0, p, (p + 0.04).clamp(0, 1), 1],
       ).createShader(r),
       child: Text(widget.text, textAlign: widget.align),
@@ -363,25 +358,27 @@ class PlainLyricsView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.s;
-    final p = context.palette;
+    final cs = context.cs;
+    final k = s.clamp(1.0, 1.6);
     return Column(
       crossAxisAlignment: fullscreen ? CrossAxisAlignment.center : CrossAxisAlignment.start,
       children: [
         Container(
-          margin: EdgeInsets.only(bottom: 8 * s),
-          padding: EdgeInsets.symmetric(horizontal: 14 * s, vertical: 6 * s),
+          padding: EdgeInsets.symmetric(horizontal: 14 * k, vertical: 8 * k),
           decoration: BoxDecoration(
-            color: p.accent.withValues(alpha: 0.16),
-            borderRadius: BorderRadius.circular(100),
+            color: cs.secondaryContainer,
+            borderRadius: BorderRadius.circular(8 * k),
           ),
-          child: Text(
-            'Letra sin sincronizar',
-            style: TextStyle(
-              color: p.accentBright,
-              fontSize: 14 * s.clamp(1.0, 1.6),
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.6,
-            ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.notes_rounded, size: 20 * k, color: cs.onSecondaryContainer),
+              SizedBox(width: 8 * k),
+              Text(
+                'Letra sin sincronizar',
+                style: context.tt.labelLarge.scaled(1.15 * k, color: cs.onSecondaryContainer),
+              ),
+            ],
           ),
         ),
         Expanded(
@@ -394,11 +391,11 @@ class PlainLyricsView extends StatelessWidget {
                 Text(
                   lines.map((l) => l.text).join('\n'),
                   textAlign: fullscreen ? TextAlign.center : TextAlign.left,
-                  style: TextStyle(
-                    color: HarmonixColors.textPrimary.withValues(alpha: 0.88),
-                    fontSize: (fullscreen ? 34 : 24) * s,
-                    fontWeight: FontWeight.w600,
-                    height: 1.55,
+                  style: context.tt.headlineSmall.scaled(
+                    (fullscreen ? 1.4 : 0.95) * s,
+                    color: cs.onSurface,
+                    weight: FontWeight.w500,
+                    height: 1.5,
                   ),
                 ),
               ],
@@ -416,23 +413,15 @@ class _LyricsLoading extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.s;
-    final p = context.palette;
+    final cs = context.cs;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        SizedBox(
-          width: 26 * s,
-          height: 26 * s,
-          child: CircularProgressIndicator(strokeWidth: 3, color: p.accentBright),
-        ),
-        SizedBox(width: 16 * s),
+        SizedBox.square(dimension: 28 * s, child: const CircularProgressIndicator(strokeWidth: 3.5)),
+        SizedBox(width: 18 * s),
         Text(
           'Buscando la letra…',
-          style: TextStyle(
-            color: HarmonixColors.textSecondary,
-            fontSize: 22 * s,
-            fontWeight: FontWeight.w600,
-          ),
+          style: context.tt.titleLarge.scaled(s, color: cs.onSurfaceVariant),
         ),
       ],
     );
@@ -447,30 +436,27 @@ class LyricsUnavailable extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.s;
-    final p = context.palette;
+    final cs = context.cs;
+    final tt = context.tt;
     final t = track;
     Widget chip(IconData icon, String label) => Container(
-      padding: EdgeInsets.symmetric(horizontal: 16 * s, vertical: 10 * s),
+      height: 48 * s.clamp(1.0, 1.6),
+      padding: EdgeInsets.only(left: 14 * s, right: 18 * s),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.07),
-        borderRadius: BorderRadius.circular(14 * s),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        color: cs.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(12 * s),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 22 * s, color: p.accentBright),
+          Icon(icon, size: 22 * s, color: cs.primary),
           SizedBox(width: 10 * s),
           Flexible(
             child: Text(
               label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: HarmonixColors.textPrimary,
-                fontSize: 18 * s,
-                fontWeight: FontWeight.w600,
-              ),
+              style: tt.labelLarge.scaled(1.25 * s, color: cs.onSurface),
             ),
           ),
         ],
@@ -482,36 +468,29 @@ class LyricsUnavailable extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Container(
-          width: 64 * s,
-          height: 64 * s,
+          width: 72 * s,
+          height: 72 * s,
           decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: LinearGradient(
-              colors: [p.accent.withValues(alpha: 0.35), p.accentDim.withValues(alpha: 0.15)],
-            ),
+            color: cs.tertiaryContainer,
+            borderRadius: BorderRadius.circular(24 * s),
           ),
-          child: Icon(Icons.music_off_rounded, color: p.accentBright, size: 32 * s),
+          child: Icon(Icons.music_off_rounded, color: cs.onTertiaryContainer, size: 36 * s),
         ),
-        SizedBox(height: 18 * s),
+        SizedBox(height: 20 * s),
         Text(
           'Letra no disponible',
-          style: TextStyle(
-            color: HarmonixColors.textPrimary,
-            fontSize: 30 * s,
-            fontWeight: FontWeight.w800,
-            letterSpacing: -0.3,
-          ),
+          style: tt.headlineMedium.scaled(s, color: cs.onSurface, weight: FontWeight.w500),
         ),
-        SizedBox(height: 6 * s),
+        SizedBox(height: 8 * s),
         Text(
           'Disfruta la música — no encontramos la letra de esta canción.',
-          style: TextStyle(color: HarmonixColors.textSecondary, fontSize: 19 * s, height: 1.35),
+          style: tt.bodyLarge.scaled(1.15 * s, color: cs.onSurfaceVariant, height: 1.4),
         ),
         if (t != null) ...[
-          SizedBox(height: 22 * s),
+          SizedBox(height: 24 * s),
           Wrap(
-            spacing: 12 * s,
-            runSpacing: 12 * s,
+            spacing: 10 * s,
+            runSpacing: 10 * s,
             children: [
               if (t.album.isNotEmpty) chip(Icons.album_rounded, t.album),
               if (t.artist.isNotEmpty) chip(Icons.person_rounded, t.artist),

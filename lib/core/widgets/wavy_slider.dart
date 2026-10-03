@@ -1,6 +1,5 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'package:pixel_car_player/core/theme/colors.dart';
 
 /// Slider tipo "wavy" inspirado en github.com/mahozad/wavy-slider.
 ///
@@ -15,9 +14,9 @@ class WavySlider extends StatefulWidget {
     required this.onChanged,
     this.min = 0.0,
     this.max = 1.0,
-    this.activeColor = HarmonixColors.accent,
-    this.inactiveColor = const Color(0x334A9EFF),
-    this.thumbColor = HarmonixColors.accentBright,
+    this.activeColor,
+    this.inactiveColor,
+    this.thumbColor,
     this.height = 40,
     this.waveAmplitude = 7,
     this.waveLength = 22,
@@ -29,9 +28,10 @@ class WavySlider extends StatefulWidget {
   final ValueChanged<double> onChanged;
   final double min;
   final double max;
-  final Color activeColor;
-  final Color inactiveColor;
-  final Color thumbColor;
+  /// Por defecto: `primary` / `surfaceContainerHighest` / `primary` del tema (M3).
+  final Color? activeColor;
+  final Color? inactiveColor;
+  final Color? thumbColor;
   final double height;
   final double waveAmplitude;
   final double waveLength;
@@ -70,6 +70,7 @@ class _WavySliderState extends State<WavySlider>
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Semantics(
       slider: true,
       child: GestureDetector(
@@ -102,9 +103,10 @@ class _WavySliderState extends State<WavySlider>
               painter: _WavySliderPainter(
                 progress: _controller.value,
                 activeRatio: _normalized,
-                activeColor: widget.activeColor,
-                inactiveColor: widget.inactiveColor,
-                thumbColor: widget.thumbColor,
+                activeColor: widget.activeColor ?? scheme.primary,
+                inactiveColor:
+                    widget.inactiveColor ?? scheme.surfaceContainerHighest,
+                thumbColor: widget.thumbColor ?? scheme.primary,
                 amplitude: widget.waveAmplitude,
                 wavelength: widget.waveLength,
                 phase: widget.animateOnPlay
@@ -133,6 +135,7 @@ class _WavySliderPainter extends CustomPainter {
 
   final double progress;
   final double activeRatio;
+  /// Por defecto: `primary` / `surfaceContainerHighest` / `primary` del tema (M3).
   final Color activeColor;
   final Color inactiveColor;
   final Color thumbColor;

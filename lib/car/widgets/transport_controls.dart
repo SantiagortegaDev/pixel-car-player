@@ -1,11 +1,10 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:pixel_car_player/car/widgets/car_scope.dart';
-import 'package:pixel_car_player/core/theme/colors.dart';
 import 'package:pixel_car_player/core/widgets/wavy_slider.dart';
 
-/// Anterior / play-pausa (círculo con gradiente Harmonix) / siguiente.
-/// Todos los objetivos táctiles ≥ 64 px.
+/// Controles multimedia M3 Expressive: anterior / play-pausa (forma que se
+/// transforma) / siguiente. Todos los objetivos táctiles ≥ 64 px.
 class TransportControls extends StatelessWidget {
   const TransportControls({
     super.key,
@@ -24,29 +23,30 @@ class TransportControls extends StatelessWidget {
 
   /// Alto que ocupa la fila (para cálculos de layout).
   static double heightFor(double s, {bool compact = false}) =>
-      (compact ? 80 : 104) * s.clamp(0.85, 1.8);
+      compact ? 72 * s.clamp(1.0, 1.8) : 104 * s.clamp(0.9, 1.8);
 
   @override
   Widget build(BuildContext context) {
-    final s = context.s.clamp(0.85, 1.8);
-    final play = (compact ? 76 : 96) * s;
+    final s = context.s.clamp(compact ? 1.0 : 0.9, 1.8);
+    final play = (compact ? 72 : 104) * s;
     final side = (compact ? 64 : 76) * s;
+    final gap = (compact ? 12 : 20) * s;
     return SizedBox(
       height: heightFor(context.s, compact: compact),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          _RoundButton(
+          _TonalButton(
             size: side,
             icon: Icons.skip_previous_rounded,
             tooltip: 'Anterior',
             onTap: onPrevious,
           ),
-          SizedBox(width: (compact ? 20 : 28) * s),
+          SizedBox(width: gap),
           PlayPauseButton(size: play, playing: playing, onTap: onToggle),
-          SizedBox(width: (compact ? 20 : 28) * s),
-          _RoundButton(
+          SizedBox(width: gap),
+          _TonalButton(
             size: side,
             icon: Icons.skip_next_rounded,
             tooltip: 'Siguiente',
@@ -58,8 +58,9 @@ class TransportControls extends StatelessWidget {
   }
 }
 
-class _RoundButton extends StatelessWidget {
-  const _RoundButton({
+/// `IconButton.filledTonal` grande (secondaryContainer).
+class _TonalButton extends StatelessWidget {
+  const _TonalButton({
     required this.size,
     required this.icon,
     required this.onTap,
@@ -72,30 +73,24 @@ class _RoundButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final p = context.palette;
-    return Tooltip(
-      message: tooltip,
-      child: Material(
-        color: Colors.white.withValues(alpha: 0.08),
-        shape: CircleBorder(side: BorderSide(color: Colors.white.withValues(alpha: 0.10))),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          splashColor: p.accent.withValues(alpha: 0.25),
-          highlightColor: p.accent.withValues(alpha: 0.12),
-          child: SizedBox(
-            width: size,
-            height: size,
-            child: Icon(icon, color: HarmonixColors.textPrimary, size: size * 0.56),
-          ),
-        ),
+    return IconButton.filledTonal(
+      onPressed: onTap,
+      tooltip: tooltip,
+      iconSize: size * 0.5,
+      style: IconButton.styleFrom(
+        fixedSize: Size.square(size),
+        minimumSize: Size.square(size),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(size / 2)),
       ),
+      icon: Icon(icon),
     );
   }
 }
 
-/// Botón circular con gradiente del acento (como `_PlayPauseBig` de Harmonix).
-class PlayPauseButton extends StatelessWidget {
+/// Play/pausa estilo Android 14: botón `primary` que se transforma de
+/// círculo (en pausa) a cuadrado redondeado (reproduciendo), con el ícono
+/// animado de Material.
+class PlayPauseButton extends StatefulWidget {
   const PlayPauseButton({
     super.key,
     required this.size,
@@ -107,57 +102,80 @@ class PlayPauseButton extends StatelessWidget {
   final VoidCallback onTap;
 
   @override
+  State<PlayPauseButton> createState() => _PlayPauseButtonState();
+}
+
+class _PlayPauseButtonState extends State<PlayPauseButton> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 450),
+    value: widget.playing ? 1 : 0,
+  );
+  late final Animation<double> _curve = CurvedAnimation(
+    parent: _c,
+    curve: Curves.easeOutBack,
+    reverseCurve: Curves.easeInOutCubic,
+  );
+
+  @override
+  void didUpdateWidget(PlayPauseButton old) {
+    super.didUpdateWidget(old);
+    if (old.playing != widget.playing) {
+      widget.playing ? _c.forward() : _c.reverse();
+    }
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final p = context.palette;
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [p.accentBright, p.accent, p.accentDim],
-          stops: const [0, 0.45, 1],
-        ),
-        shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(
-            color: p.accent.withValues(alpha: 0.5),
-            blurRadius: size * 0.3,
-            offset: Offset(0, size * 0.08),
-          ),
-        ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        shape: const CircleBorder(),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          customBorder: const CircleBorder(),
-          child: Center(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 240),
-              transitionBuilder: (child, anim) => ScaleTransition(
-                scale: anim,
-                child: FadeTransition(opacity: anim, child: child),
-              ),
-              child: Icon(
-                playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                key: ValueKey(playing),
-                color: Colors.white,
-                size: size * 0.52,
-                shadows: const [Shadow(color: Color(0x40000000), blurRadius: 6)],
+    final cs = Theme.of(context).colorScheme;
+    final size = widget.size;
+    return Semantics(
+      button: true,
+      label: widget.playing ? 'Pausar' : 'Reproducir',
+      child: AnimatedBuilder(
+        animation: _curve,
+        builder: (context, _) {
+          final t = _curve.value;
+          // Círculo (0.5) → cuadrado redondeado (0.3).
+          final radius = size * (0.5 - 0.2 * t.clamp(0.0, 1.1));
+          return Material(
+            color: cs.primary,
+            elevation: 3,
+            shadowColor: cs.shadow,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: widget.onTap,
+              splashColor: cs.onPrimary.withValues(alpha: 0.12),
+              highlightColor: cs.onPrimary.withValues(alpha: 0.10),
+              child: SizedBox(
+                width: size,
+                height: size,
+                child: Center(
+                  child: AnimatedIcon(
+                    icon: AnimatedIcons.play_pause,
+                    progress: _c,
+                    color: cs.onPrimary,
+                    size: size * 0.46,
+                  ),
+                ),
               ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
 }
 
-/// WavySlider de Harmonix con tiempos grandes a los lados.
+/// WavySlider (estilo Android 13) con tiempos a los lados. La onda se
+/// aplana suavemente al pausar.
 class CarProgressBar extends StatelessWidget {
   const CarProgressBar({
     super.key,
@@ -175,14 +193,13 @@ class CarProgressBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.s;
-    final p = context.palette;
-    final timeStyle = TextStyle(
-      color: HarmonixColors.textSecondary,
-      fontSize: 18 * s.clamp(0.9, 1.6),
-      fontWeight: FontWeight.w600,
-      fontFeatures: const [FontFeature.tabularFigures()],
-    );
+    final k = s.clamp(0.95, 1.6);
+    final cs = context.cs;
+    final timeStyle = context.tt.labelLarge
+        .scaled(1.25 * k, color: cs.onSurfaceVariant, weight: FontWeight.w500)
+        .copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
     final total = duration.inMilliseconds;
+    final touch = kCarMinTouch * s.clamp(1.0, 1.6);
     return ValueListenableBuilder<Duration>(
       valueListenable: position,
       builder: (context, pos, _) {
@@ -190,35 +207,40 @@ class CarProgressBar extends StatelessWidget {
         return Row(
           children: [
             SizedBox(
-              width: 64 * s.clamp(0.9, 1.6),
+              width: 62 * k,
               child: Text(formatDuration(pos), style: timeStyle),
             ),
+            SizedBox(width: 8 * s),
             Expanded(
               child: SizedBox(
                 // Zona táctil alta (≥64) para arrastrar manejando.
-                height: kCarMinTouch * s.clamp(1.0, 1.6),
-                child: Center(
-                  child: RepaintBoundary(
+                height: touch,
+                child: TweenAnimationBuilder<double>(
+                  tween: Tween(end: playing ? 5.5 * k : 0),
+                  duration: const Duration(milliseconds: 600),
+                  curve: Curves.easeInOutCubic,
+                  builder: (context, amp, _) => RepaintBoundary(
                     child: WavySlider(
                       value: v,
                       min: 0,
                       max: total > 0 ? total.toDouble() : 1,
                       onChanged: (x) => onSeek(Duration(milliseconds: x.round())),
-                      height: kCarMinTouch * s.clamp(1.0, 1.6),
-                      waveAmplitude: playing ? 6 * s : 0.01,
-                      waveLength: 26 * s,
-                      waveSpeed: 1.8,
-                      animateOnPlay: playing,
-                      activeColor: p.accent,
-                      inactiveColor: Colors.white.withValues(alpha: 0.16),
-                      thumbColor: p.accentBright,
+                      height: touch,
+                      waveAmplitude: amp,
+                      waveLength: 30 * k,
+                      waveSpeed: 1.4,
+                      animateOnPlay: playing || amp > 0.05,
+                      activeColor: cs.primary,
+                      inactiveColor: cs.surfaceContainerHighest,
+                      thumbColor: cs.primary,
                     ),
                   ),
                 ),
               ),
             ),
+            SizedBox(width: 8 * s),
             SizedBox(
-              width: 64 * s.clamp(0.9, 1.6),
+              width: 62 * k,
               child: Text(formatDuration(duration), style: timeStyle, textAlign: TextAlign.right),
             ),
           ],

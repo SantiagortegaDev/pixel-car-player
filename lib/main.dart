@@ -1,3 +1,4 @@
+import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pixel_car_player/car/car_root.dart';
@@ -25,13 +26,14 @@ class _PixelCarPlayerAppState extends State<PixelCarPlayerApp> {
 
   Future<void> _setMode(AppMode? mode) async {
     await AppConfig.saveMode(mode);
-    if (mode == AppMode.car) {
-      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    } else {
-      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    }
+    await SystemChrome.setEnabledSystemUIMode(mode == AppMode.car
+        ? SystemUiMode.immersiveSticky
+        : SystemUiMode.edgeToEdge);
     setState(() => _mode = mode);
   }
+
+  /// Color semilla del wallpaper (Material You, Android 12+). null = no disponible.
+  Color? _systemSeed;
 
   @override
   void initState() {
@@ -39,11 +41,28 @@ class _PixelCarPlayerAppState extends State<PixelCarPlayerApp> {
     if (_mode == AppMode.car) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     }
+    _loadSystemSeed();
+  }
+
+  Future<void> _loadSystemSeed() async {
+    Color? seed;
+    try {
+      final palette = await DynamicColorPlugin.getCorePalette();
+      if (palette != null) {
+        seed = Color(palette.primary.get(40));
+      } else {
+        seed = await DynamicColorPlugin.getAccentColor();
+      }
+    } catch (_) {
+      seed = null; // Web / Android < 12: se usa la semilla Harmonix.
+    }
+    if (mounted && seed != null) setState(() => _systemSeed = seed);
   }
 
   @override
   Widget build(BuildContext context) {
     final Widget home = switch (_mode) {
+      // La tableta genera su propio tema Material You desde la carátula.
       AppMode.car => CarRoot(
           demo: widget.config.demo,
           onChangeMode: () => _setMode(null),
@@ -51,12 +70,17 @@ class _PixelCarPlayerAppState extends State<PixelCarPlayerApp> {
       AppMode.phone => PhoneRoot(onChangeMode: () => _setMode(null)),
       null => ModeSelectScreen(onSelected: _setMode),
     };
+    // Material You: esquema tonal desde el color del wallpaper (Android 12+);
+    // si no hay, desde la semilla Harmonix.
+    final seed = _systemSeed ?? AppTheme.fallbackSeed;
     return MaterialApp(
       title: 'Pixel Car Player',
       debugShowCheckedModeBanner: false,
-      theme: HarmonixTheme.dark(),
-      darkTheme: HarmonixTheme.dark(),
-      themeMode: ThemeMode.dark,
+      theme: AppTheme.build(
+          AppTheme.schemeFromSeed(seed, brightness: Brightness.light)),
+      darkTheme: AppTheme.build(AppTheme.schemeFromSeed(seed)),
+      // En el carro siempre oscuro; el celular sigue al sistema.
+      themeMode: _mode == AppMode.car ? ThemeMode.dark : ThemeMode.system,
       home: home,
     );
   }

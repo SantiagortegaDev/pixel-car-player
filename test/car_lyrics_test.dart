@@ -3,9 +3,9 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pixel_car_player/car/car_controller.dart';
-import 'package:pixel_car_player/car/color/artwork_palette.dart';
 import 'package:pixel_car_player/car/lyrics/lrclib_client.dart';
 import 'package:pixel_car_player/core/models/now_playing.dart';
+import 'package:pixel_car_player/core/theme/app_theme.dart';
 import 'package:pixel_car_player/data/link/link_protocol.dart';
 
 const _track = TrackInfo(
@@ -125,26 +125,55 @@ void main() {
     });
   });
 
-  group('paleta', () {
-    Uint8List solid(int r, int g, int b, {int n = 400}) {
-      final out = Uint8List(n * 4);
-      for (var i = 0; i < n; i++) {
-        out.setAll(i * 4, [r, g, b, 255]);
-      }
-      return out;
-    }
+  group('esquema Material You desde la carátula', () {
+    final art1 = Uint8List.fromList([1, 2, 3]);
+    final art2 = Uint8List.fromList([4, 5, 6, 7]);
+    final red = AppTheme.schemeFromSeed(const Color(0xFFD02030));
+    final green = AppTheme.schemeFromSeed(const Color(0xFF20B040));
 
-    test('imagen roja → acento rojo legible', () {
-      final p = paletteFromRgba(solid(220, 30, 40));
-      final h = HSLColor.fromColor(p.accent);
-      expect(h.hue < 15 || h.hue > 345, isTrue);
-      expect(h.lightness, greaterThan(0.5));
-      expect(HSLColor.fromColor(p.accentBright).lightness, greaterThan(h.lightness));
+    test('sin carátula usa el esquema semilla, oscuro', () {
+      final c = CarController();
+      expect(c.scheme, CarController.fallbackScheme);
+      expect(c.scheme.brightness, Brightness.dark);
+      c.dispose();
     });
 
-    test('imagen gris → acento Harmonix', () {
-      final p = paletteFromRgba(solid(128, 128, 128));
-      expect(p.accent, ArtworkPalette.harmonix.accent);
+    test('genera, aplica y cachea por pista', () async {
+      var calls = 0;
+      final c = CarController(
+        demo: true,
+        schemeBuilder: (b) async {
+          calls++;
+          return b.length == 3 ? red : green;
+        },
+      );
+      c.apply(const TrackMessage(_track));
+      c.apply(ArtMessage(id: 't1', mime: 'image/png', bytes: art1));
+      await pumpEventQueue();
+      expect(c.scheme, red);
+      expect(calls, 1);
+
+      const other = TrackInfo(id: 't2', title: 'Otra', artist: 'X');
+      c.apply(const TrackMessage(other));
+      c.apply(ArtMessage(id: 't2', mime: 'image/png', bytes: art2));
+      await pumpEventQueue();
+      expect(c.scheme, green);
+
+      // Volver a la primera pista: sale de la caché, sin recalcular.
+      c.apply(const TrackMessage(_track));
+      c.apply(ArtMessage(id: 't1', mime: 'image/png', bytes: art1));
+      expect(c.scheme, red);
+      expect(calls, 2);
+      c.dispose();
+    });
+
+    test('un error al generar conserva el esquema actual', () async {
+      final c = CarController(demo: true, schemeBuilder: (_) async => throw StateError('x'));
+      c.apply(const TrackMessage(_track));
+      c.apply(ArtMessage(id: 't1', mime: 'image/png', bytes: art1));
+      await pumpEventQueue();
+      expect(c.scheme, CarController.fallbackScheme);
+      c.dispose();
     });
   });
 }

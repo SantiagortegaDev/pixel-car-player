@@ -1,270 +1,128 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'colors.dart';
-import 'typography.dart';
 
-/// Tema Harmonix basado en Material 3 con paleta azul marino fija.
+/// Tema Material Design 3 + Material You (estilo Harmonix).
 ///
-/// Soporta dynamic theming Material You: el [seedColor] del esquema puede
-/// cambiarse en tiempo de ejecución desde Ajustes, regenerando la paleta
-/// MD3 completa con [ColorScheme.fromSeed] pero conservando los colores
-/// fijos Harmonix para fondo/superficie.
-class HarmonixTheme {
-  HarmonixTheme._();
+/// TODO el color sale de un [ColorScheme] dinámico:
+///  - Celular: colores del sistema (wallpaper, Android 12+) vía `dynamic_color`.
+///  - Tableta: esquema generado de la carátula que suena
+///    ([ColorScheme.fromImageProvider]), igual que el reproductor de Android.
+/// Nunca uses colores fijos en widgets: usa `Theme.of(context).colorScheme`.
+class AppTheme {
+  AppTheme._();
 
-  static Color _seed = HarmonixColors.accent;
+  /// Semilla por defecto (violeta MD3 baseline de Harmonix web).
+  static const Color fallbackSeed = Color(0xFF7B5BD6);
 
-  static Color get currentSeed => _seed;
+  /// Variante tonal de Material You usada en toda la app.
+  static const DynamicSchemeVariant variant = DynamicSchemeVariant.tonalSpot;
 
-  static void setSeed(Color color) {
-    _seed = color;
-  }
+  static ColorScheme schemeFromSeed(Color seed,
+          {Brightness brightness = Brightness.dark}) =>
+      ColorScheme.fromSeed(
+        seedColor: seed,
+        brightness: brightness,
+        dynamicSchemeVariant: variant,
+      );
 
-  /// Esquema oscuro con la paleta Harmonix personalizada.
-  static ColorScheme _colorScheme(Color seed) {
-    final seeded = ColorScheme.fromSeed(
-      seedColor: seed,
-      brightness: Brightness.dark,
-    );
-    return seeded.copyWith(
-      // Forzamos la paleta Harmonix sobre la semilla
-      surface: HarmonixColors.background,
-      onSurface: HarmonixColors.textPrimary,
-      surfaceContainerLowest: HarmonixColors.backgroundDark,
-      surfaceContainerLow: HarmonixColors.background,
-      surfaceContainer: HarmonixColors.surface,
-      surfaceContainerHigh: HarmonixColors.surfaceVariant,
-      surfaceContainerHighest: HarmonixColors.surfaceContainerHigh,
-      onSurfaceVariant: HarmonixColors.textSecondary,
-      primary: HarmonixColors.accent,
-      onPrimary: Colors.white,
-      primaryContainer: HarmonixColors.surfaceVariant,
-      onPrimaryContainer: HarmonixColors.accentBright,
-      secondary: HarmonixColors.accent,
-      secondaryContainer: HarmonixColors.surfaceVariant,
-      onSecondaryContainer: HarmonixColors.accentBright,
-      tertiary: HarmonixColors.favorite,
-      tertiaryContainer: HarmonixColors.surfaceVariant,
-      onTertiaryContainer: HarmonixColors.favorite,
-      outline: HarmonixColors.textDisabled,
-      outlineVariant: HarmonixColors.textDisabled.withValues(alpha: 0.4),
-      error: HarmonixColors.error,
-      onError: Colors.white,
-      inverseSurface: HarmonixColors.textPrimary,
-      onInverseSurface: HarmonixColors.background,
-      scrim: Colors.black,
-    );
-  }
+  /// Esquema desde una imagen (carátula). Funciona en Android y web.
+  static Future<ColorScheme> schemeFromImage(ImageProvider image,
+          {Brightness brightness = Brightness.dark}) =>
+      ColorScheme.fromImageProvider(
+        provider: image,
+        brightness: brightness,
+        dynamicSchemeVariant: variant,
+      );
 
-  static ThemeData dark([Color? seed]) {
-    final scheme = _colorScheme(seed ?? _seed);
-    return ThemeData(
+  static ThemeData dark([ColorScheme? scheme]) =>
+      build(scheme ?? schemeFromSeed(fallbackSeed));
+
+  static ThemeData light([ColorScheme? scheme]) =>
+      build(scheme ?? schemeFromSeed(fallbackSeed, brightness: Brightness.light));
+
+  /// Construye el ThemeData M3 completo a partir de un esquema.
+  static ThemeData build(ColorScheme s) {
+    final isDark = s.brightness == Brightness.dark;
+    final base = ThemeData(
       useMaterial3: true,
-      brightness: Brightness.dark,
-      colorScheme: scheme,
-      scaffoldBackgroundColor: HarmonixColors.background,
-      canvasColor: HarmonixColors.background,
+      colorScheme: s,
+      brightness: s.brightness,
+    );
+    return base.copyWith(
+      scaffoldBackgroundColor: s.surface,
+      canvasColor: s.surface,
       splashFactory: InkSparkle.splashFactory,
-      textTheme: HarmonixTypography.textTheme,
-      primaryTextTheme: HarmonixTypography.textTheme,
       appBarTheme: AppBarTheme(
-        backgroundColor: Colors.transparent,
+        backgroundColor: s.surface,
+        foregroundColor: s.onSurface,
         elevation: 0,
-        scrolledUnderElevation: 0,
+        scrolledUnderElevation: 3,
+        surfaceTintColor: s.surfaceTint,
         centerTitle: false,
-        systemOverlayStyle: SystemUiOverlayStyle.light.copyWith(
-          statusBarColor: Colors.transparent,
-          statusBarIconBrightness: Brightness.light,
-        ),
-        titleTextStyle: HarmonixTypography.textTheme.titleLarge,
-        iconTheme: const IconThemeData(color: HarmonixColors.textPrimary),
+        systemOverlayStyle:
+            (isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
+                .copyWith(statusBarColor: Colors.transparent),
       ),
       cardTheme: CardThemeData(
-        color: HarmonixColors.surface,
+        color: s.surfaceContainer,
         elevation: 0,
         margin: EdgeInsets.zero,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-        ),
-        surfaceTintColor: Colors.transparent,
-      ),
-      navigationBarTheme: NavigationBarThemeData(
-        backgroundColor: HarmonixColors.surface,
-        indicatorColor: HarmonixColors.accent.withValues(alpha: 0.18),
-        indicatorShape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        surfaceTintColor: Colors.transparent,
-        labelTextStyle: WidgetStateProperty.resolveWith((states) {
-          final selected = states.contains(WidgetState.selected);
-          return TextStyle(
-            fontFamily: HarmonixTypography.bodyFont,
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-            color: selected
-                ? HarmonixColors.accentBright
-                : HarmonixColors.textSecondary,
-          );
-        }),
-        iconTheme: WidgetStateProperty.resolveWith((states) {
-          final selected = states.contains(WidgetState.selected);
-          return IconThemeData(
-            color: selected
-                ? HarmonixColors.accentBright
-                : HarmonixColors.textSecondary,
-            size: 24,
-          );
-        }),
-        height: 72,
-        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          backgroundColor: HarmonixColors.accent,
-          foregroundColor: Colors.white,
           minimumSize: const Size(56, 52),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          textStyle: HarmonixTypography.textTheme.labelLarge,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
-          foregroundColor: HarmonixColors.accent,
-          side: BorderSide(color: HarmonixColors.accent.withValues(alpha: 0.5)),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
+          minimumSize: const Size(56, 52),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         ),
       ),
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
-          foregroundColor: HarmonixColors.accent,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
-      ),
-      iconButtonTheme: IconButtonThemeData(
-        style: IconButton.styleFrom(
-          foregroundColor: HarmonixColors.textPrimary,
-          highlightColor: HarmonixColors.accent.withValues(alpha: 0.12),
-        ),
-      ),
-      sliderTheme: SliderThemeData(
-        activeTrackColor: HarmonixColors.accent,
-        inactiveTrackColor: HarmonixColors.accent.withValues(alpha: 0.2),
-        thumbColor: HarmonixColors.accentBright,
-        overlayColor: HarmonixColors.accent.withValues(alpha: 0.15),
-        trackHeight: 4,
-        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
-        overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
-      ),
-      dividerTheme: DividerThemeData(
-        color: HarmonixColors.textDisabled.withValues(alpha: 0.2),
-        thickness: 1,
-        space: 1,
       ),
       listTileTheme: ListTileThemeData(
-        iconColor: HarmonixColors.textSecondary,
-        textColor: HarmonixColors.textPrimary,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
       chipTheme: ChipThemeData(
-        backgroundColor: HarmonixColors.surface,
-        selectedColor: HarmonixColors.accent,
-        labelStyle: HarmonixTypography.textTheme.labelLarge,
-        side: BorderSide(
-          color: HarmonixColors.textDisabled.withValues(alpha: 0.25),
-        ),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
       snackBarTheme: SnackBarThemeData(
-        backgroundColor: HarmonixColors.surfaceVariant,
-        contentTextStyle: HarmonixTypography.textTheme.bodyMedium?.copyWith(
-              color: HarmonixColors.textPrimary),
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
       dialogTheme: DialogThemeData(
-        backgroundColor: HarmonixColors.surface,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(24),
-        ),
-        titleTextStyle: HarmonixTypography.textTheme.titleLarge,
-        contentTextStyle: HarmonixTypography.textTheme.bodyMedium,
+        backgroundColor: s.surfaceContainerHigh,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
       ),
       bottomSheetTheme: BottomSheetThemeData(
-        backgroundColor: HarmonixColors.surface,
-        modalBackgroundColor: HarmonixColors.surface,
+        backgroundColor: s.surfaceContainerLow,
+        modalBackgroundColor: s.surfaceContainerLow,
+        showDragHandle: true,
         shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         ),
-        showDragHandle: true,
-        dragHandleColor: HarmonixColors.textDisabled,
       ),
-      progressIndicatorTheme: ProgressIndicatorThemeData(
-        color: HarmonixColors.accent,
-        linearTrackColor: HarmonixColors.accent.withValues(alpha: 0.15),
-        circularTrackColor: HarmonixColors.accent.withValues(alpha: 0.15),
-      ),
-      switchTheme: SwitchThemeData(
-        thumbColor: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected)) {
-            return Colors.white;
-          }
-          return HarmonixColors.textDisabled;
-        }),
-        trackColor: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected)) {
-            return HarmonixColors.accent;
-          }
-          return HarmonixColors.textDisabled.withValues(alpha: 0.3);
-        }),
-        trackOutlineColor: WidgetStateProperty.all(Colors.transparent),
+      navigationBarTheme: NavigationBarThemeData(
+        height: 80,
+        backgroundColor: s.surfaceContainer,
+        indicatorColor: s.secondaryContainer,
+        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
       ),
       pageTransitionsTheme: const PageTransitionsTheme(
         builders: {
-          TargetPlatform.android: _HarmonixPageTransitionsBuilder(),
-          TargetPlatform.iOS: _HarmonixPageTransitionsBuilder(),
+          TargetPlatform.android: FadeForwardsPageTransitionsBuilder(),
+          TargetPlatform.iOS: FadeForwardsPageTransitionsBuilder(),
         },
-      ),
-    );
-  }
-}
-
-/// Transición de página personalizada: combinación fade + slide vertical suave.
-class _HarmonixPageTransitionsBuilder extends PageTransitionsBuilder {
-  const _HarmonixPageTransitionsBuilder();
-
-  @override
-  Widget buildTransitions<T>(
-    PageRoute<T> route,
-    BuildContext context,
-    Animation<double> animation,
-    Animation<double> secondaryAnimation,
-    Widget child,
-  ) {
-    final curved = CurvedAnimation(
-      parent: animation,
-      curve: Curves.easeOutCubic,
-      reverseCurve: Curves.easeInCubic,
-    );
-    return FadeTransition(
-      opacity: curved,
-      child: SlideTransition(
-        position: Tween<Offset>(
-          begin: const Offset(0, 0.04),
-          end: Offset.zero,
-        ).animate(curved),
-        child: child,
       ),
     );
   }

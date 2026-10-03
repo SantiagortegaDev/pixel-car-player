@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:pixel_car_player/car/car_controller.dart';
 import 'package:pixel_car_player/car/widgets/car_scope.dart';
-import 'package:pixel_car_player/core/theme/colors.dart';
 import 'package:pixel_car_player/data/link/car_link_client.dart';
 
 const _weekdays = ['lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom'];
@@ -22,7 +21,7 @@ const _months = [
   'dic',
 ];
 
-/// Barra superior: reloj + fecha, chip de conexión, letras y ajustes.
+/// Barra superior M3: reloj + fecha, chip de conexión, letras y ajustes.
 class CarTopBar extends StatelessWidget {
   const CarTopBar({
     super.key,
@@ -39,28 +38,43 @@ class CarTopBar extends StatelessWidget {
   final VoidCallback? onLyrics;
   final bool lyricsActive;
 
+  static double heightFor(double s) => kCarMinTouch * s.clamp(1.0, 1.6);
+
   @override
   Widget build(BuildContext context) {
     final s = context.s;
+    final gap = 12 * s.clamp(0.9, 1.6);
     return SizedBox(
-      height: 72 * s.clamp(0.9, 1.6),
+      height: heightFor(s),
       child: Row(
         children: [
           const CarClock(),
-          const Spacer(),
-          if (source == CarSource.local) ...[const _LocalChip(), SizedBox(width: 12 * s)],
-          ConnectionChip(status: status, demo: source == CarSource.demo),
-          SizedBox(width: 12 * s),
+          SizedBox(width: gap),
+          Expanded(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                if (source == CarSource.local) ...[const _LocalChip(), SizedBox(width: gap)],
+                Flexible(child: ConnectionChip(status: status)),
+              ],
+            ),
+          ),
+          SizedBox(width: gap),
           if (onLyrics != null) ...[
             CarIconButton(
-              icon: lyricsActive ? Icons.close_fullscreen_rounded : Icons.lyrics_rounded,
+              icon: Icons.lyrics_outlined,
+              selectedIcon: Icons.lyrics_rounded,
               tooltip: lyricsActive ? 'Salir de letras' : 'Letras a pantalla completa',
               onTap: onLyrics!,
-              highlighted: lyricsActive,
+              selected: lyricsActive,
             ),
-            SizedBox(width: 12 * s),
+            SizedBox(width: gap),
           ],
-          CarIconButton(icon: Icons.settings_rounded, tooltip: 'Ajustes', onTap: onSettings),
+          CarIconButton(
+            icon: Icons.settings_outlined,
+            tooltip: 'Ajustes',
+            onTap: onSettings,
+          ),
         ],
       ),
     );
@@ -95,7 +109,9 @@ class _CarClockState extends State<CarClock> {
 
   @override
   Widget build(BuildContext context) {
-    final s = context.s.clamp(0.9, 1.6);
+    final k = context.s.clamp(0.9, 1.6);
+    final cs = context.cs;
+    final tt = context.tt;
     final hh = _now.hour.toString().padLeft(2, '0');
     final mm = _now.minute.toString().padLeft(2, '0');
     final date = '${_weekdays[_now.weekday - 1]}, ${_now.day} ${_months[_now.month - 1]}';
@@ -104,81 +120,80 @@ class _CarClockState extends State<CarClock> {
       children: [
         Text(
           '$hh:$mm',
-          style: TextStyle(
-            color: HarmonixColors.textPrimary,
-            fontSize: 34 * s,
-            fontWeight: FontWeight.w800,
-            letterSpacing: -0.5,
-            fontFeatures: const [FontFeature.tabularFigures()],
-          ),
+          style: tt.displaySmall
+              .scaled(k, color: cs.onSurface, weight: FontWeight.w400, height: 1)
+              .copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
         ),
-        SizedBox(width: 14 * s),
-        Container(width: 2, height: 26 * s, color: Colors.white.withValues(alpha: 0.18)),
-        SizedBox(width: 14 * s),
-        Text(
-          date,
-          style: TextStyle(
-            color: HarmonixColors.textSecondary,
-            fontSize: 19 * s,
-            fontWeight: FontWeight.w600,
-          ),
+        SizedBox(width: 16 * k),
+        Container(
+          width: 1,
+          height: 28 * k,
+          color: cs.outlineVariant,
         ),
+        SizedBox(width: 16 * k),
+        Text(date, style: tt.titleLarge.scaled(k, color: cs.onSurfaceVariant)),
       ],
     );
   }
 }
 
-/// Chip de conexión: nombre del celular + ícono Wi-Fi/BT, o "Buscando…".
+/// Chip de conexión M3: nombre del celular + ícono Wi-Fi/BT, o "Buscando…".
+/// `secondaryContainer` conectado, `surfaceContainerHigh` buscando y
+/// `errorContainer` sin conexión.
 class ConnectionChip extends StatelessWidget {
-  const ConnectionChip({super.key, required this.status, this.demo = false});
+  const ConnectionChip({super.key, required this.status});
   final LinkStatus status;
-  final bool demo;
 
   @override
   Widget build(BuildContext context) {
-    final s = context.s.clamp(0.9, 1.6);
-    final (IconData icon, String label, Color dot) = switch (status.phase) {
+    final k = context.s.clamp(0.9, 1.6);
+    final cs = context.cs;
+    final (Widget leading, String label, Color bg, Color fg) = switch (status.phase) {
       LinkPhase.connected => (
-        status.transport == 'bt' ? Icons.bluetooth_connected_rounded : Icons.wifi_rounded,
+        Icon(status.transport == 'bt' ? Icons.bluetooth_connected_rounded : Icons.wifi_rounded),
         status.device ?? 'Celular',
-        HarmonixColors.success,
+        cs.secondaryContainer,
+        cs.onSecondaryContainer,
       ),
-      LinkPhase.searching => (Icons.wifi_find_rounded, 'Buscando…', HarmonixColors.warning),
+      LinkPhase.searching => (
+        SizedBox.square(
+          dimension: 20 * k,
+          child: CircularProgressIndicator(strokeWidth: 2.6 * k, color: cs.primary),
+        ),
+        'Buscando…',
+        cs.surfaceContainerHigh,
+        cs.onSurface,
+      ),
       LinkPhase.disconnected => (
-        Icons.wifi_off_rounded,
+        const Icon(Icons.wifi_off_rounded),
         'Sin conexión',
-        HarmonixColors.textDisabled,
+        cs.errorContainer,
+        cs.onErrorContainer,
       ),
     };
-    return Container(
-      height: 52 * s,
-      constraints: BoxConstraints(maxWidth: 300 * s),
-      padding: EdgeInsets.symmetric(horizontal: 18 * s),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(100),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _PulseDot(color: dot, pulse: status.phase == LinkPhase.searching, size: 10 * s),
-          SizedBox(width: 12 * s),
-          Icon(icon, color: HarmonixColors.textPrimary, size: 24 * s),
-          SizedBox(width: 10 * s),
-          Flexible(
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: HarmonixColors.textPrimary,
-                fontSize: 18 * s,
-                fontWeight: FontWeight.w700,
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
+      height: 52 * k,
+      constraints: BoxConstraints(maxWidth: 320 * k),
+      padding: EdgeInsets.only(left: 16 * k, right: 20 * k),
+      decoration: ShapeDecoration(color: bg, shape: const StadiumBorder()),
+      child: IconTheme.merge(
+        data: IconThemeData(color: fg, size: 24 * k),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            leading,
+            SizedBox(width: 10 * k),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: context.tt.labelLarge.scaled(1.3 * k, color: fg, weight: FontWeight.w500),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -189,26 +204,22 @@ class _LocalChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final s = context.s.clamp(0.9, 1.6);
+    final k = context.s.clamp(0.9, 1.6);
+    final cs = context.cs;
     return Container(
-      height: 52 * s,
-      padding: EdgeInsets.symmetric(horizontal: 18 * s),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.06),
-        borderRadius: BorderRadius.circular(100),
+      height: 52 * k,
+      padding: EdgeInsets.only(left: 16 * k, right: 20 * k),
+      decoration: ShapeDecoration(
+        shape: StadiumBorder(side: BorderSide(color: cs.outlineVariant)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.tablet_android_rounded, color: HarmonixColors.textSecondary, size: 22 * s),
-          SizedBox(width: 8 * s),
+          Icon(Icons.tablet_android_rounded, color: cs.primary, size: 22 * k),
+          SizedBox(width: 8 * k),
           Text(
             'Reproductor local',
-            style: TextStyle(
-              color: HarmonixColors.textSecondary,
-              fontSize: 17 * s,
-              fontWeight: FontWeight.w600,
-            ),
+            style: context.tt.labelLarge.scaled(1.3 * k, color: cs.onSurfaceVariant),
           ),
         ],
       ),
@@ -216,106 +227,44 @@ class _LocalChip extends StatelessWidget {
   }
 }
 
-class _PulseDot extends StatefulWidget {
-  const _PulseDot({required this.color, required this.pulse, required this.size});
-  final Color color;
-  final bool pulse;
-  final double size;
-
-  @override
-  State<_PulseDot> createState() => _PulseDotState();
-}
-
-class _PulseDotState extends State<_PulseDot> with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1100),
-  );
-
-  @override
-  void initState() {
-    super.initState();
-    if (widget.pulse) _c.repeat(reverse: true);
-  }
-
-  @override
-  void didUpdateWidget(_PulseDot old) {
-    super.didUpdateWidget(old);
-    if (widget.pulse && !_c.isAnimating) {
-      _c.repeat(reverse: true);
-    } else if (!widget.pulse && _c.isAnimating) {
-      _c.stop();
-      _c.value = 1;
-    }
-  }
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _c,
-      builder: (_, _) {
-        final t = widget.pulse ? 0.35 + 0.65 * _c.value : 1.0;
-        return Container(
-          width: widget.size,
-          height: widget.size,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: widget.color.withValues(alpha: t),
-            boxShadow: [
-              BoxShadow(
-                color: widget.color.withValues(alpha: 0.6 * t),
-                blurRadius: widget.size,
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-}
-
-/// Botón de ícono grande (≥ 64 px) para la barra superior.
+/// `IconButton.filledTonal` grande (≥ 64 px). Seleccionado → `filled`.
 class CarIconButton extends StatelessWidget {
   const CarIconButton({
     super.key,
     required this.icon,
     required this.onTap,
     required this.tooltip,
-    this.highlighted = false,
+    this.selectedIcon,
+    this.selected = false,
   });
   final IconData icon;
+  final IconData? selectedIcon;
   final VoidCallback onTap;
   final String tooltip;
-  final bool highlighted;
+  final bool selected;
 
   @override
   Widget build(BuildContext context) {
-    final s = context.s.clamp(1.0, 1.6);
-    final p = context.palette;
-    final size = kCarMinTouch * s;
-    return Tooltip(
-      message: tooltip,
-      child: Material(
-        color: highlighted
-            ? p.accent.withValues(alpha: 0.28)
-            : Colors.white.withValues(alpha: 0.08),
-        shape: CircleBorder(side: BorderSide(color: Colors.white.withValues(alpha: 0.10))),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: SizedBox(
-            width: size,
-            height: size,
-            child: Icon(icon, color: HarmonixColors.textPrimary, size: 30 * s),
-          ),
-        ),
-      ),
+    final size = kCarMinTouch * context.s.clamp(1.0, 1.6);
+    final style = IconButton.styleFrom(
+      fixedSize: Size.square(size),
+      minimumSize: Size.square(size),
     );
+    final child = Icon(selected ? (selectedIcon ?? icon) : icon);
+    return selected
+        ? IconButton.filled(
+            onPressed: onTap,
+            tooltip: tooltip,
+            iconSize: size * 0.45,
+            style: style,
+            icon: child,
+          )
+        : IconButton.filledTonal(
+            onPressed: onTap,
+            tooltip: tooltip,
+            iconSize: size * 0.45,
+            style: style,
+            icon: child,
+          );
   }
 }

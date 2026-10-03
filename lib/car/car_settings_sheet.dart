@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:pixel_car_player/car/car_controller.dart';
-import 'package:pixel_car_player/core/theme/colors.dart';
 import 'package:pixel_car_player/data/bridge/native_bridge.dart';
 import 'package:pixel_car_player/data/link/car_link_client.dart';
 
@@ -36,6 +35,9 @@ class _CarSettingsSheetState extends State<CarSettingsSheet> {
     text: widget.controller.prefs.manualIp ?? '',
   );
   List<Map<String, dynamic>> _bonded = const [];
+
+  /// Pestaña elegida en el SegmentedButton (null = según la conexión guardada).
+  bool? _bluetooth;
   bool _loadingBonded = true;
 
   CarController get c => widget.controller;
@@ -82,116 +84,188 @@ class _CarSettingsSheetState extends State<CarSettingsSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
     return ListenableBuilder(
       listenable: Listenable.merge([c, c.link.status]),
-      builder: (context, _) => ListView(
-        padding: const EdgeInsets.fromLTRB(28, 0, 28, 28),
-        children: [
-          const Text(
-            'Ajustes',
-            style: TextStyle(
-              fontSize: 30,
-              fontWeight: FontWeight.w800,
-              color: HarmonixColors.textPrimary,
+      builder: (context, _) {
+        final bt = _bluetooth ?? c.prefs.btAddress != null;
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 32),
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Text('Ajustes', style: tt.headlineMedium?.copyWith(color: cs.onSurface)),
             ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            c.demo ? 'Modo demo activo — datos simulados' : _statusText(c.displayStatus),
-            style: const TextStyle(fontSize: 18, color: HarmonixColors.textSecondary),
-          ),
-          _Section('Conexión con el celular'),
-          _Choice(
-            icon: Icons.wifi_rounded,
-            title: 'Wi-Fi automático',
-            subtitle: 'Hotspot del celular o la misma red. Se busca solo.',
-            selected: c.prefs.btAddress == null,
-            onTap: () => _pickBt(null, null),
-          ),
-          if (_loadingBonded)
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Center(child: CircularProgressIndicator()),
-            )
-          else if (_bonded.isEmpty)
-            const _Hint(
-              'No hay celulares emparejados por Bluetooth (o este radio no expone el Bluetooth estándar). '
-              'Usa Wi-Fi.',
-            )
-          else
-            for (final d in _bonded)
-              _Choice(
-                icon: Icons.bluetooth_rounded,
-                title: (d['name'] as String?)?.isNotEmpty == true
-                    ? d['name'] as String
-                    : 'Dispositivo',
-                subtitle: 'Bluetooth · ${d['address']}',
-                selected: c.prefs.btAddress == d['address'],
-                onTap: () => _pickBt(d['address'] as String?, d['name'] as String?),
+            const SizedBox(height: 4),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Text(
+                c.demo ? 'Modo demo activo — datos simulados' : _statusText(c.displayStatus),
+                style: tt.bodyLarge?.copyWith(color: cs.onSurfaceVariant, fontSize: 18),
               ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _ip,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  style: const TextStyle(fontSize: 22),
-                  decoration: InputDecoration(
-                    labelText: 'IP manual del celular (opcional)',
-                    hintText: '192.168.43.1',
-                    filled: true,
-                    fillColor: Colors.white.withValues(alpha: 0.06),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-                  ),
-                  onSubmitted: (_) => _saveIp(),
+            ),
+            const _Section('Conexión con el celular'),
+            SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(
+                  value: false,
+                  icon: Icon(Icons.wifi_rounded),
+                  label: Text('Wi-Fi'),
                 ),
-              ),
-              const SizedBox(width: 12),
-              SizedBox(
-                height: 64,
-                child: FilledButton(
-                  onPressed: _saveIp,
-                  child: const Text('Guardar', style: TextStyle(fontSize: 18)),
+                ButtonSegment(
+                  value: true,
+                  icon: Icon(Icons.bluetooth_rounded),
+                  label: Text('Bluetooth'),
                 ),
+              ],
+              selected: {bt},
+              style: SegmentedButton.styleFrom(
+                minimumSize: const Size(0, 48),
+                visualDensity: const VisualDensity(vertical: 4),
+                textStyle: tt.titleMedium?.copyWith(fontSize: 18),
+                iconSize: 24,
               ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          _InfoRow(
-            icon: Icons.lan_rounded,
-            label: 'IP de esta tableta',
-            value: c.tabletIps.isEmpty ? 'sin red' : c.tabletIps.join('  ·  '),
-          ),
-          _Section('Pantalla'),
-          _SwitchRow(
-            icon: Icons.light_mode_rounded,
-            title: 'Mantener pantalla encendida',
-            value: c.prefs.keepScreenOn,
-            onChanged: c.setKeepScreenOn,
-          ),
-          _SwitchRow(
-            icon: Icons.play_circle_outline_rounded,
-            title: 'Modo demo',
-            subtitle: 'Canciones de ejemplo para probar la pantalla sin celular.',
-            value: c.demo,
-            onChanged: c.setDemo,
-          ),
-          _Section('Aplicación'),
-          SizedBox(
-            height: 64,
-            child: OutlinedButton.icon(
-              onPressed: () {
-                Navigator.of(context).pop();
-                widget.onChangeMode();
+              onSelectionChanged: (v) {
+                final wantBt = v.first;
+                setState(() => _bluetooth = wantBt);
+                if (!wantBt) _pickBt(null, null);
               },
-              icon: const Icon(Icons.swap_horiz_rounded, size: 28),
-              label: const Text('Cambiar modo (celular/tableta)', style: TextStyle(fontSize: 19)),
             ),
-          ),
-        ],
-      ),
+            const SizedBox(height: 16),
+            if (!bt) ...[
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Text(
+                  'Hotspot del celular o la misma red Wi-Fi. Se busca solo; la IP manual es opcional.',
+                  style: tt.bodyLarge?.copyWith(color: cs.onSurfaceVariant),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _ip,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      style: tt.titleLarge,
+                      decoration: InputDecoration(
+                        labelText: 'IP manual del celular (opcional)',
+                        hintText: '192.168.43.1',
+                        prefixIcon: const Icon(Icons.router_outlined),
+                        filled: true,
+                        fillColor: cs.surfaceContainerHighest,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          borderSide: BorderSide(color: cs.outlineVariant),
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+                      ),
+                      onSubmitted: (_) => _saveIp(),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  SizedBox(
+                    height: 64,
+                    child: FilledButton(
+                      onPressed: _saveIp,
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 28),
+                        textStyle: tt.titleMedium?.copyWith(fontSize: 18),
+                      ),
+                      child: const Text('Guardar'),
+                    ),
+                  ),
+                ],
+              ),
+            ] else if (_loadingBonded)
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (_bonded.isEmpty)
+              Card(
+                color: cs.surfaceContainerHigh,
+                child: ListTile(
+                  minVerticalPadding: 16,
+                  leading: Icon(Icons.bluetooth_disabled_rounded, color: cs.onSurfaceVariant),
+                  title: const Text(
+                    'No hay celulares emparejados por Bluetooth (o este radio no expone el '
+                    'Bluetooth estándar). Usa Wi-Fi.',
+                  ),
+                ),
+              )
+            else
+              Card(
+                color: cs.surfaceContainer,
+                child: Column(
+                  children: [
+                    for (final d in _bonded)
+                      _DeviceTile(
+                        title: (d['name'] as String?)?.isNotEmpty == true
+                            ? d['name'] as String
+                            : 'Dispositivo',
+                        subtitle: '${d['address']}',
+                        selected: c.prefs.btAddress == d['address'],
+                        onTap: () => _pickBt(d['address'] as String?, d['name'] as String?),
+                      ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 8),
+            ListTile(
+              minTileHeight: 64,
+              leading: Icon(Icons.lan_outlined, color: cs.onSurfaceVariant),
+              title: const Text('IP de esta tableta'),
+              titleTextStyle: tt.bodyLarge?.copyWith(color: cs.onSurfaceVariant, fontSize: 18),
+              trailing: Text(
+                c.tabletIps.isEmpty ? 'sin red' : c.tabletIps.join('  ·  '),
+                style: tt.titleMedium?.copyWith(color: cs.onSurface, fontSize: 19),
+              ),
+            ),
+            const _Section('Pantalla'),
+            Card(
+              color: cs.surfaceContainer,
+              child: Column(
+                children: [
+                  _Switch(
+                    icon: Icons.light_mode_outlined,
+                    title: 'Mantener pantalla encendida',
+                    value: c.prefs.keepScreenOn,
+                    onChanged: c.setKeepScreenOn,
+                  ),
+                  Divider(height: 1, indent: 64, endIndent: 20, color: cs.outlineVariant),
+                  _Switch(
+                    icon: Icons.play_circle_outline_rounded,
+                    title: 'Modo demo',
+                    subtitle: 'Canciones de ejemplo para probar la pantalla sin celular.',
+                    value: c.demo,
+                    onChanged: c.setDemo,
+                  ),
+                ],
+              ),
+            ),
+            const _Section('Aplicación'),
+            SizedBox(
+              height: 64,
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  widget.onChangeMode();
+                },
+                style: OutlinedButton.styleFrom(
+                  shape: const StadiumBorder(),
+                  textStyle: tt.titleMedium?.copyWith(fontSize: 18),
+                ),
+                icon: const Icon(Icons.swap_horiz_rounded, size: 26),
+                label: const Text('Cambiar modo (celular/tableta)'),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -209,108 +283,52 @@ class _Section extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(top: 28, bottom: 10),
+    padding: const EdgeInsets.fromLTRB(8, 28, 8, 12),
     child: Text(
-      title.toUpperCase(),
-      style: const TextStyle(
-        color: HarmonixColors.accentBright,
-        fontSize: 15,
-        fontWeight: FontWeight.w800,
-        letterSpacing: 1.6,
+      title,
+      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+        color: Theme.of(context).colorScheme.primary,
+        fontSize: 17,
       ),
     ),
   );
 }
 
-class _Hint extends StatelessWidget {
-  const _Hint(this.text);
-  final String text;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
-    child: Text(text, style: const TextStyle(color: HarmonixColors.textSecondary, fontSize: 16)),
-  );
-}
-
-class _Choice extends StatelessWidget {
-  const _Choice({
-    required this.icon,
+class _DeviceTile extends StatelessWidget {
+  const _DeviceTile({
     required this.title,
     required this.subtitle,
     required this.selected,
     required this.onTap,
   });
-  final IconData icon;
   final String title;
   final String subtitle;
   final bool selected;
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: Material(
-      color: selected
-          ? HarmonixColors.accent.withValues(alpha: 0.16)
-          : Colors.white.withValues(alpha: 0.04),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(18),
-        side: BorderSide(
-          color: selected ? HarmonixColors.accent : Colors.white.withValues(alpha: 0.06),
-          width: selected ? 2 : 1,
-        ),
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return ListTile(
+      minTileHeight: 76,
+      onTap: onTap,
+      selected: selected,
+      selectedTileColor: cs.secondaryContainer,
+      selectedColor: cs.onSecondaryContainer,
+      leading: const Icon(Icons.smartphone_rounded, size: 28),
+      title: Text(title, style: const TextStyle(fontSize: 19)),
+      subtitle: Text('Bluetooth · $subtitle', style: const TextStyle(fontSize: 15)),
+      trailing: Icon(
+        selected ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
+        size: 28,
+        color: selected ? cs.primary : cs.onSurfaceVariant,
       ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 76),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            child: Row(
-              children: [
-                Icon(
-                  icon,
-                  size: 30,
-                  color: selected ? HarmonixColors.accentBright : HarmonixColors.textSecondary,
-                ),
-                const SizedBox(width: 18),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: const TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
-                          color: HarmonixColors.textPrimary,
-                        ),
-                      ),
-                      Text(
-                        subtitle,
-                        style: const TextStyle(fontSize: 15, color: HarmonixColors.textSecondary),
-                      ),
-                    ],
-                  ),
-                ),
-                Icon(
-                  selected ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded,
-                  size: 30,
-                  color: selected ? HarmonixColors.accentBright : HarmonixColors.textDisabled,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
+    );
+  }
 }
 
-class _SwitchRow extends StatelessWidget {
-  const _SwitchRow({
+class _Switch extends StatelessWidget {
+  const _Switch({
     required this.icon,
     required this.title,
     required this.value,
@@ -324,73 +342,13 @@ class _SwitchRow extends StatelessWidget {
   final ValueChanged<bool> onChanged;
 
   @override
-  Widget build(BuildContext context) => InkWell(
-    borderRadius: BorderRadius.circular(18),
-    onTap: () => onChanged(!value),
-    child: ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 72),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-        child: Row(
-          children: [
-            Icon(icon, size: 30, color: HarmonixColors.textSecondary),
-            const SizedBox(width: 18),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w700,
-                      color: HarmonixColors.textPrimary,
-                    ),
-                  ),
-                  if (subtitle != null)
-                    Text(
-                      subtitle!,
-                      style: const TextStyle(fontSize: 15, color: HarmonixColors.textSecondary),
-                    ),
-                ],
-              ),
-            ),
-            Transform.scale(
-              scale: 1.3,
-              child: Switch(value: value, onChanged: onChanged),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
-class _InfoRow extends StatelessWidget {
-  const _InfoRow({required this.icon, required this.label, required this.value});
-  final IconData icon;
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
-    child: Row(
-      children: [
-        Icon(icon, size: 26, color: HarmonixColors.textSecondary),
-        const SizedBox(width: 18),
-        Text('$label: ', style: const TextStyle(fontSize: 17, color: HarmonixColors.textSecondary)),
-        Expanded(
-          child: Text(
-            value,
-            style: const TextStyle(
-              fontSize: 19,
-              fontWeight: FontWeight.w700,
-              color: HarmonixColors.textPrimary,
-            ),
-          ),
-        ),
-      ],
-    ),
+  Widget build(BuildContext context) => SwitchListTile(
+    minTileHeight: 76,
+    contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+    secondary: Icon(icon, size: 28),
+    title: Text(title, style: const TextStyle(fontSize: 19)),
+    subtitle: subtitle == null ? null : Text(subtitle!, style: const TextStyle(fontSize: 15)),
+    value: value,
+    onChanged: onChanged,
   );
 }

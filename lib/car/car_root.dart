@@ -53,12 +53,11 @@ class _CarRootState extends State<CarRoot> {
     if (c == null) return const Scaffold(body: SizedBox.shrink());
     return ChangeNotifierProvider<CarController>.value(
       value: c,
-      child: Builder(
-        builder: (context) => CarPlayerScreen(
-          initialLyricsFullscreen: kIsWeb && Uri.base.queryParameters['lyrics'] == '1',
-          onSettings: () =>
-              showCarSettings(context, controller: c, onChangeMode: widget.onChangeMode),
-        ),
+      child: CarPlayerScreen(
+        initialLyricsFullscreen: kIsWeb && Uri.base.queryParameters['lyrics'] == '1',
+        // El context recibido ya tiene el tema Material You de la carátula.
+        onSettings: (themed) =>
+            showCarSettings(themed, controller: c, onChangeMode: widget.onChangeMode),
       ),
     );
   }

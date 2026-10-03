@@ -146,12 +146,13 @@ final demoTracks = <DemoTrack>[
 /// Simula un celular transmitiendo: emite los mismos [LinkMessage] que el
 /// enlace real y acepta los mismos comandos.
 ///
-/// En web acepta `?track=N` (1..3) y `?t=SEG` para fijar el punto de partida
-/// (útil para capturas).
+/// En web acepta `?track=N` (1..3), `?t=SEG` y `?paused=1` para fijar el punto
+/// de partida (útil para capturas).
 class DemoSource {
-  DemoSource({int startTrack = 0, Duration startAt = Duration.zero})
+  DemoSource({int startTrack = 0, Duration startAt = Duration.zero, bool paused = false})
     : _index = startTrack.clamp(0, demoTracks.length - 1),
-      _offset = startAt;
+      _offset = startAt,
+      _playing = !paused;
 
   factory DemoSource.fromUrl() {
     if (!kIsWeb) return DemoSource(startAt: Duration.zero);
@@ -161,6 +162,7 @@ class DemoSource {
     return DemoSource(
       startTrack: tr,
       startAt: Duration(seconds: t),
+      paused: q['paused'] == '1',
     );
   }
 
@@ -170,7 +172,7 @@ class DemoSource {
   int _index;
   Duration _offset; // posición en el instante _since
   DateTime _since = DateTime.now();
-  bool _playing = true;
+  bool _playing;
   Timer? _timer;
   final Map<String, Uint8List> _artCache = {};
 
