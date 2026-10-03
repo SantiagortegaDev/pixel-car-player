@@ -117,6 +117,36 @@ void main() {
           expect(find.text('192.168.43.1:47321'), findsOneWidget);
           expect(tester.takeException(), isNull);
 
+          // Hotspot del carro.
+          await tester.scrollUntilVisible(
+            find.text('Conectarme automáticamente'),
+            300,
+            scrollable: find.byType(Scrollable).first,
+          );
+          expect(find.text('Conectarme automáticamente'), findsOneWidget);
+          expect(find.text('Sin Wi-Fi'), findsOneWidget);
+          await tester.enterText(
+            find.widgetWithText(TextField, 'Nombre de la red (SSID)'),
+            'Carro',
+          );
+          await tester.enterText(
+            find.widgetWithText(TextField, 'Contraseña'),
+            'clave12345',
+          );
+          await tester.ensureVisible(find.text('Guardar'));
+          await tester.pump();
+          await tester.tap(find.text('Guardar'));
+          await _settle(tester);
+          final hp = await SharedPreferences.getInstance();
+          expect(hp.getString('phone_car_hotspot_ssid'), 'Carro');
+          expect(hp.getString('phone_car_hotspot_password'), 'clave12345');
+          expect(hp.getBool('phone_car_hotspot_autoconnect'), isTrue);
+          expect(find.textContaining('Guardado'), findsOneWidget);
+          // El snackbar flotante tapa la barra inferior: esperar a que se vaya.
+          await tester.pump(const Duration(seconds: 6));
+          await _settle(tester);
+          expect(tester.takeException(), isNull);
+
           // Ajustes: fuente de música y permisos.
           await tester.tap(find.text('Ajustes'));
           await _settle(tester);

@@ -94,6 +94,9 @@ class PhoneController extends ChangeNotifier with WidgetsBindingObserver {
   final NativeBridge _bridge;
   static const _kSource = 'phone_source';
   static const _kAutoStart = 'phone_autostart';
+  static const _kHsSsid = 'phone_car_hotspot_ssid';
+  static const _kHsPass = 'phone_car_hotspot_password';
+  static const _kHsAuto = 'phone_car_hotspot_autoconnect';
 
   bool get supported => _bridge.isSupported;
 
@@ -105,6 +108,15 @@ class PhoneController extends ChangeNotifier with WidgetsBindingObserver {
   bool notificationsPermission = false;
   bool busy = false;
   List<String> localIps = const [];
+
+  // Hotspot del carro (conexión automática del celular).
+  String hotspotSsid = '';
+  String hotspotPassword = '';
+  bool hotspotAuto = false;
+  bool hotspotBusy = false;
+  bool hotspotLoaded = false;
+  bool wifiConnected = false;
+  String? wifiSsid;
 
   StreamSubscription<Map<String, dynamic>>? _sub;
   bool _disposed = false;
@@ -122,7 +134,11 @@ class PhoneController extends ChangeNotifier with WidgetsBindingObserver {
         orElse: () => SourceApp.spotify,
       );
       autoStart = p.getBool(_kAutoStart) ?? true;
+      hotspotSsid = p.getString(_kHsSsid) ?? '';
+      hotspotPassword = p.getString(_kHsPass) ?? '';
+      hotspotAuto = p.getBool(_kHsAuto) ?? false;
     } catch (_) {}
+    hotspotLoaded = true;
 
     if (!supported) {
       // Demo para web / capturas.
@@ -162,6 +178,110 @@ class PhoneController extends ChangeNotifier with WidgetsBindingObserver {
     _notify();
     if (autoStart && permissionsOk && !status.running) {
       await start();
+    }
+    // Re-aplica la red sugerida (es inofensivo si ya estaba registrada).
+    if (hotspotAuto && hotspotSsid.isNotEmpty) {
+      try {
+        await _bridge.setHotspotAutoConnect(
+          ssid: hotspotSsid,
+          password: hotspotPassword,
+          enabled: true,
+        );
+      } catch (_) {}
+    }
+    await refreshWifi();
+  }
+
+  /// Estado del Wi-Fi del celular (vacío en web / sin nativo).
+  Future<void> refreshWifi() async {
+    if (_disposed || !supported) return;
+    try {
+      final m = await _bridge.getWifiStatus();
+      wifiConnected = m['connected'] == true;
+      final s = m['ssid'];
+      wifiSsid = (s is String && s.isNotEmpty && s != '<unknown ssid>')
+          ? s
+          : null;
+    } catch (_) {
+      wifiConnected = false;
+      wifiSsid = null;
+    }
+    _notify();
+  }
+
+  /// Guarda la red del carro y (des)activa la conexión automática.
+  /// Devuelve el mensaje a mostrar y si fue exitoso.
+  Future<({bool ok, String message})> saveHotspot({
+    required String ssid,
+    required String password,
+    required bool enabled,
+  }) async {
+    ssid = ssid.trim();
+    if (enabled && ssid.isEmpty) {
+      return (ok: false, message: 'Escribe el nombre de la red (SSID).');
+    }
+    if (enabled && password.isNotEmpty && password.length < 8) {
+      return (
+        ok: false,
+        message: 'La contraseña debe tener al menos 8 caracteres.',
+      );
+    }
+    hotspotBusy = true;
+    hotspotSsid = ssid;
+    hotspotPassword = password;
+    hotspotAuto = enabled;
+    _notify();
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_kHsSsid, ssid);
+      await p.setString(_kHsPass, password);
+      await p.setBool(_kHsAuto, enabled);
+    } catch (_) {}
+    try {
+      if (!enabled) {
+        if (supported && ssid.isNotEmpty) {
+          await _bridge.setHotspotAutoConnect(
+            ssid: ssid,
+            password: password,
+            enabled: false,
+          );
+        }
+        return (ok: true, message: 'Conexión automática desactivada.');
+      }
+      if (!supported) {
+        return (
+          ok: true,
+          message: 'Guardado (la conexión automática solo funciona en el celular).',
+        );
+      }
+      final r = await _bridge.setHotspotAutoConnect(
+        ssid: ssid,
+        password: password,
+        enabled: true,
+      );
+      if (r['ok'] == true) {
+        final android10 = r['method'] == 'suggestion'
+            ? ' Si aparece «¿Permitir redes sugeridas?», acéptalo.'
+            : '';
+        return (
+          ok: true,
+          message:
+              'Listo: el celular se unirá solo a «$ssid» cuando esté cerca.$android10',
+        );
+      }
+      final e = r['error'];
+      return (
+        ok: false,
+        message: (e is String && e.isNotEmpty)
+            ? e
+            : 'No se pudo registrar la red.',
+      );
+    } catch (e) {
+      return (ok: false, message: 'No se pudo registrar la red: $e');
+    } finally {
+      hotspotBusy = false;
+      _notify();
+      refreshWifi();
     }
   }
 
@@ -241,6 +361,7 @@ class PhoneController extends ChangeNotifier with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && supported) {
       refreshPermissions();
+      refreshWifi();
     }
   }
 

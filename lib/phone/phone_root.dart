@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:pixel_car_player/core/theme/app_theme.dart';
 import 'package:pixel_car_player/phone/phone_controller.dart';
+import 'package:pixel_car_player/phone/widgets/hotspot_card.dart';
 import 'package:pixel_car_player/phone/widgets/hx/hx.dart';
 import 'package:pixel_car_player/phone/widgets/phone_widgets.dart';
 
@@ -343,6 +344,9 @@ class _ConnectionView extends StatelessWidget {
       const SizedBox(height: 24),
       const HxSectionTitle('Cómo conectar', icon: Symbols.help_rounded),
       HelpItems(ips: c.localIps, port: c.status.port),
+      const SizedBox(height: 24),
+      const HxSectionTitle('Hotspot del carro', icon: Symbols.wifi_tethering_rounded),
+      HotspotCard(c: c),
     ],
   );
 }
