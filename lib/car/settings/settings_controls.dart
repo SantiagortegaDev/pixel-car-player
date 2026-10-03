@@ -689,6 +689,8 @@ class SettingsField extends StatelessWidget {
     this.suffix,
     this.monospace = false,
     this.fieldKey,
+    this.obscure = false,
+    this.prefix,
   });
   final TextEditingController controller;
   final String? hint;
@@ -700,6 +702,10 @@ class SettingsField extends StatelessWidget {
   final Widget? suffix;
   final bool monospace;
   final Key? fieldKey;
+
+  /// Oculta el texto (contraseñas).
+  final bool obscure;
+  final Widget? prefix;
 
   @override
   Widget build(BuildContext context) {
@@ -717,8 +723,11 @@ class SettingsField extends StatelessWidget {
           key: fieldKey,
           controller: controller,
           keyboardType: keyboardType,
-          maxLines: maxLines,
+          maxLines: obscure ? 1 : maxLines,
           minLines: 1,
+          obscureText: obscure,
+          autocorrect: !obscure,
+          enableSuggestions: !obscure,
           style: style,
           onSubmitted: onSubmitted == null ? null : (_) => onSubmitted!(),
           onChanged: onChanged,
@@ -729,6 +738,7 @@ class SettingsField extends StatelessWidget {
             fillColor: cs.surfaceContainerHighest,
             isDense: false,
             suffixIcon: suffix,
+            prefixIcon: prefix,
             contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
             border: UnderlineInputBorder(
               borderRadius: radius,

@@ -15,8 +15,9 @@ void main() {
 
     test('track con números como double', () {
       final m = LinkProtocol.decodeLine(
-          '{"t":"track","id":"abc","title":"Canción","artist":"Artista","album":"Disco",'
-          '"durationMs":222000.0,"source":"com.spotify.music"}\n');
+        '{"t":"track","id":"abc","title":"Canción","artist":"Artista","album":"Disco",'
+        '"durationMs":222000.0,"source":"com.spotify.music"}\n',
+      );
       final t = (m as TrackMessage).track;
       expect(t.id, 'abc');
       expect(t.title, 'Canción');
@@ -46,8 +47,9 @@ void main() {
 
     test('lyrics', () {
       final m = LinkProtocol.decodeLine(
-          '{"t":"lyrics","id":"abc","status":"ok","synced":true,'
-          '"lines":[{"ms":0,"text":""},{"ms":1200.0,"text":"Hola"}]}');
+        '{"t":"lyrics","id":"abc","status":"ok","synced":true,'
+        '"lines":[{"ms":0,"text":""},{"ms":1200.0,"text":"Hola"}]}',
+      );
       final l = m as LyricsMessage;
       expect(l.status, LyricsStatus.ok);
       expect(l.synced, isTrue);
@@ -55,8 +57,7 @@ void main() {
       expect(l.lines[1].time, const Duration(milliseconds: 1200));
       expect(l.lines[1].text, 'Hola');
       expect(
-        (LinkProtocol.decodeLine('{"t":"lyrics","id":"x","status":"not_found"}') as LyricsMessage)
-            .status,
+        (LinkProtocol.decodeLine('{"t":"lyrics","id":"x","status":"not_found"}') as LyricsMessage).status,
         LyricsStatus.notFound,
       );
     });
@@ -75,8 +76,7 @@ void main() {
   group('codificación', () {
     test('cmd y seek', () {
       expect(LinkProtocol.cmd(LinkAction.toggle), {'t': 'cmd', 'action': 'toggle'});
-      expect(LinkProtocol.cmd(LinkAction.seek, positionMs: 5000),
-          {'t': 'cmd', 'action': 'seek', 'positionMs': 5000});
+      expect(LinkProtocol.cmd(LinkAction.seek, positionMs: 5000), {'t': 'cmd', 'action': 'seek', 'positionMs': 5000});
     });
 
     test('encodeLine termina en \\n y es una sola línea', () {

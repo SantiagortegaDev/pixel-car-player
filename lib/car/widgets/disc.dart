@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:pixel_car_player/car/audio/car_audio_levels.dart';
 import 'package:pixel_car_player/car/custom/car_customization.dart';
 import 'package:pixel_car_player/car/widgets/hx.dart';
 import 'package:pixel_car_player/core/shapes/m3_shapes.dart';
@@ -11,10 +12,13 @@ import 'package:pixel_car_player/core/shapes/m3_shapes.dart';
 /// una forma MD3 (Cookie9Sided por defecto), que gira (solo la máscara; 23,5 s por vuelta)
 /// mientras suena, y 44 barras tipo píldora que nacen del borde de la forma + 12 px.
 ///
-/// La tableta no tiene el audio (sale por el Bluetooth del radio), así que las barras se
-/// alimentan con un pseudo-espectro procedural: graves arriba, agudos abajo, reflejado
-/// izquierda/derecha, con el mismo suavizado de Harmonix (ataque 0,35 · caída 0,12).
-/// En pausa bajan hasta quedar como puntos.
+/// Las barras salen del audio real de la tableta ([audio], Visualizer de Android) cuando
+/// [realAudio]; si no, de un pseudo-espectro procedural. Siempre graves arriba, agudos
+/// abajo, reflejado izquierda/derecha, con el suavizado de Harmonix (ataque 0,35 · caída
+/// 0,12). Sin actividad bajan hasta quedar como puntos.
+///
+/// [playing] = "animar" (suena, se detectó audio o "Animar siempre"). Con [reduced] no
+/// gira ni se mueven las barras (como el modo reducido de Harmonix).
 ///
 /// Todo es configurable desde Configuración → Portada y visualizador ([cover], [viz]).
 class Disc extends StatefulWidget {
@@ -27,6 +31,9 @@ class Disc extends StatefulWidget {
     this.cover = const CarCoverOpts(),
     this.viz = const CarVisualizerOpts(),
     this.showBars = true,
+    this.reduced,
+    this.audio,
+    this.realAudio = false,
   });
 
   final Uint8List? artwork;
@@ -36,6 +43,15 @@ class Disc extends StatefulWidget {
   final CarCoverOpts cover;
   final CarVisualizerOpts viz;
   final bool showBars;
+
+  /// Animaciones reducidas (`null` = la preferencia del sistema).
+  final bool? reduced;
+
+  /// Niveles del audio real (eventos `fft`).
+  final CarAudioLevels? audio;
+
+  /// Usar [audio] en vez del espectro simulado.
+  final bool realAudio;
 
   static const bars = 44;
   static const spacing = 12.0;
@@ -81,7 +97,9 @@ class _DiscState extends State<Disc> with SingleTickerProviderStateMixin {
   late final math.Random _rnd = math.Random(widget.seed);
   late _Spectrum _spectrum = _Spectrum(widget.viz.bars ~/ 2, _rnd);
 
-  bool get _reduced => WidgetsBinding.instance.platformDispatcher.accessibilityFeatures.disableAnimations;
+  bool get _reduced =>
+      widget.reduced ?? WidgetsBinding.instance.platformDispatcher.accessibilityFeatures.disableAnimations;
+  bool get _real => widget.realAudio && widget.audio != null;
   bool get _animating => widget.playing && !_reduced && (widget.cover.rotate || widget.showBars);
 
   @override
@@ -101,7 +119,11 @@ class _DiscState extends State<Disc> with SingleTickerProviderStateMixin {
       _levels = next;
       _spectrum = _Spectrum(widget.viz.bars ~/ 2, _rnd);
     }
-    if (old.playing != widget.playing || old.cover.rotate != widget.cover.rotate || old.showBars != widget.showBars) {
+    if (old.playing != widget.playing ||
+        old.cover.rotate != widget.cover.rotate ||
+        old.showBars != widget.showBars ||
+        old.reduced != widget.reduced ||
+        old.realAudio != widget.realAudio) {
       _wake();
     }
   }
@@ -121,7 +143,8 @@ class _DiscState extends State<Disc> with SingleTickerProviderStateMixin {
       _rotation = (_rotation - dt * 360 / widget.cover.turnSeconds) % 360;
     }
     final speed = widget.viz.speed;
-    if (playing) _spectrum.advance(dt * speed);
+    final real = _real;
+    if (playing && !real) _spectrum.advance(dt * speed);
 
     var active = false;
     final bars = _levels.length;
@@ -130,7 +153,11 @@ class _DiscState extends State<Disc> with SingleTickerProviderStateMixin {
     final f = dt * 60 * math.sqrt(speed);
     for (var i = 0; i < bars; i++) {
       final k = i < half ? i : bars - 1 - i;
-      final target = playing && widget.showBars ? _spectrum.target(k) : 0.0;
+      final target = !playing || !widget.showBars
+          ? 0.0
+          : real
+          ? widget.audio!.level(k, half, sensitivity: widget.viz.sensitivity)
+          : _spectrum.target(k);
       final a = target > _levels[i] ? 0.35 : 0.12;
       _levels[i] += (target - _levels[i]) * (1 - math.pow(1 - a, f));
       if (_levels[i] > 0.004) active = true;

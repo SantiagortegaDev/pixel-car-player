@@ -24,8 +24,23 @@ enum CarLyricsAlign { left, center }
 
 enum CarSeekMode { off, tap, doubleTap }
 
+/// Animaciones (como `motion` de Harmonix v2): del sistema, siempre completas o reducidas.
+enum CarMotion { system, full, reduced }
+
+/// De dónde salen las barras del visualizador.
+enum CarVizSource {
+  /// Audio real si la tableta lo detecta; si no, el espectro simulado mientras suena.
+  auto,
+
+  /// Solo el audio real (Visualizer de Android). Sin audio, las barras quedan quietas.
+  real,
+
+  /// Siempre el espectro simulado (no pide permisos).
+  simulated,
+}
+
 /// Secciones del modelo (para restablecer por partes).
-enum CarSection { connection, startup, design, cover, visualizer, lyrics, visibility, texts, gestures }
+enum CarSection { connection, startup, hotspot, design, cover, visualizer, lyrics, visibility, texts, gestures }
 
 /// Rango de un ajuste numérico (lo usan el modelo para acotar y la UI para los sliders).
 @immutable
@@ -285,6 +300,7 @@ class CarDesign with _JsonEquality {
     this.shapesCount = 14,
     this.shapesOpacity = 1.0,
     this.shapesAnimate = true,
+    this.motion = CarMotion.system,
   });
 
   final CarColorSource colorSource;
@@ -301,6 +317,9 @@ class CarDesign with _JsonEquality {
   final int shapesCount;
   final double shapesOpacity;
   final bool shapesAnimate;
+
+  /// Animaciones: Sistema (sigue «quitar animaciones» de Android) / Completas / Reducidas.
+  final CarMotion motion;
 
   static const uiScaleRange = CarRange(0.8, 1.6, 0.05);
   static const titleScaleRange = CarRange(0.7, 1.6, 0.05);
@@ -322,6 +341,7 @@ class CarDesign with _JsonEquality {
     int? shapesCount,
     double? shapesOpacity,
     bool? shapesAnimate,
+    CarMotion? motion,
   }) => CarDesign(
     colorSource: colorSource ?? this.colorSource,
     fixedColor: fixedColor ?? this.fixedColor,
@@ -335,6 +355,7 @@ class CarDesign with _JsonEquality {
     shapesCount: shapesCount ?? this.shapesCount,
     shapesOpacity: shapesOpacity ?? this.shapesOpacity,
     shapesAnimate: shapesAnimate ?? this.shapesAnimate,
+    motion: motion ?? this.motion,
   );
 
   @override
@@ -351,6 +372,7 @@ class CarDesign with _JsonEquality {
     'shapesCount': shapesCount,
     'shapesOpacity': shapesOpacity,
     'shapesAnimate': shapesAnimate,
+    'motion': motion.name,
   };
 
   factory CarDesign.fromJson(Object? json) {
@@ -369,6 +391,7 @@ class CarDesign with _JsonEquality {
       shapesCount: _num(m['shapesCount'], d.shapesCount.toDouble(), shapesCountRange).round(),
       shapesOpacity: _num(m['shapesOpacity'], d.shapesOpacity, shapesOpacityRange),
       shapesAnimate: _bool(m['shapesAnimate'], d.shapesAnimate),
+      motion: _enum(CarMotion.values, m['motion'], d.motion),
     );
   }
 }
@@ -443,6 +466,9 @@ class CarVisualizerOpts with _JsonEquality {
     this.roundCaps = true,
     this.color = CarVizColor.primary,
     this.pausedDots = true,
+    this.source = CarVizSource.auto,
+    this.sensitivity = 1.0,
+    this.animateAlways = false,
   });
 
   /// Multiplicador del largo de las barras.
@@ -457,11 +483,24 @@ class CarVisualizerOpts with _JsonEquality {
   final CarVizColor color;
   final bool pausedDots;
 
+  /// Audio real / simulado / automático.
+  final CarVizSource source;
+
+  /// Ganancia sobre el audio real (sube si las barras se mueven poco).
+  final double sensitivity;
+
+  /// Animar aunque no se sepa si está sonando (p. ej. la app Bluetooth del radio no avisa).
+  final bool animateAlways;
+
   static const amplificationRange = CarRange(0.25, 3.0, 0.05);
   static const barsRange = CarRange(16, 96, 2);
   static const thicknessRange = CarRange(0.4, 2.5, 0.05);
   static const spacingRange = CarRange(0, 40, 1);
   static const speedRange = CarRange(0.25, 2.5, 0.05);
+  static const sensitivityRange = CarRange(0.25, 4.0, 0.05);
+
+  /// ¿Se usa (o se intenta usar) el Visualizer de Android?
+  bool get wantsRealAudio => source != CarVizSource.simulated;
 
   CarVisualizerOpts copyWith({
     double? amplification,
@@ -472,6 +511,9 @@ class CarVisualizerOpts with _JsonEquality {
     bool? roundCaps,
     CarVizColor? color,
     bool? pausedDots,
+    CarVizSource? source,
+    double? sensitivity,
+    bool? animateAlways,
   }) => CarVisualizerOpts(
     amplification: amplification ?? this.amplification,
     bars: bars ?? this.bars,
@@ -481,6 +523,9 @@ class CarVisualizerOpts with _JsonEquality {
     roundCaps: roundCaps ?? this.roundCaps,
     color: color ?? this.color,
     pausedDots: pausedDots ?? this.pausedDots,
+    source: source ?? this.source,
+    sensitivity: sensitivity ?? this.sensitivity,
+    animateAlways: animateAlways ?? this.animateAlways,
   );
 
   @override
@@ -493,6 +538,9 @@ class CarVisualizerOpts with _JsonEquality {
     'roundCaps': roundCaps,
     'color': color.name,
     'pausedDots': pausedDots,
+    'source': source.name,
+    'sensitivity': sensitivity,
+    'animateAlways': animateAlways,
   };
 
   factory CarVisualizerOpts.fromJson(Object? json) {
@@ -509,6 +557,9 @@ class CarVisualizerOpts with _JsonEquality {
       roundCaps: _bool(m['roundCaps'], d.roundCaps),
       color: _enum(CarVizColor.values, m['color'], d.color),
       pausedDots: _bool(m['pausedDots'], d.pausedDots),
+      source: _enum(CarVizSource.values, m['source'], d.source),
+      sensitivity: _num(m['sensitivity'], d.sensitivity, sensitivityRange),
+      animateAlways: _bool(m['animateAlways'], d.animateAlways),
     );
   }
 }
@@ -635,6 +686,10 @@ class CarStartupOpts with _JsonEquality {
     this.immersive = true,
     this.lockLandscape = false,
     this.startLyricsFullscreen = false,
+    this.companionEnabled = false,
+    this.companionPackage = '',
+    this.companionLabel = '',
+    this.companionDelayMs = 1500,
   });
 
   /// Se guarda además en `car_autostart` (lo lee el BootReceiver nativo).
@@ -646,7 +701,23 @@ class CarStartupOpts with _JsonEquality {
   final bool lockLandscape;
   final bool startLyricsFullscreen;
 
+  /// Abrir la app acompañante (p. ej. la de música Bluetooth del radio) al iniciar, detrás.
+  /// Se guarda además en `car_companion_package` (vacío = apagado) para el BootReceiver.
+  final bool companionEnabled;
+  final String companionPackage;
+
+  /// Nombre visible de la app (solo para mostrar).
+  final String companionLabel;
+
+  /// Espera (ms) antes de volver a traer Pixel Car Player al frente. También en
+  /// `car_companion_delay`.
+  final int companionDelayMs;
+
   static const delayRange = CarRange(0, 60, 1);
+  static const companionDelayRange = CarRange(0, 10000, 250);
+
+  /// Paquete a abrir al iniciar ('' = ninguno).
+  String get companionToLaunch => companionEnabled ? companionPackage : '';
 
   CarStartupOpts copyWith({
     bool? autostart,
@@ -654,12 +725,20 @@ class CarStartupOpts with _JsonEquality {
     bool? immersive,
     bool? lockLandscape,
     bool? startLyricsFullscreen,
+    bool? companionEnabled,
+    String? companionPackage,
+    String? companionLabel,
+    int? companionDelayMs,
   }) => CarStartupOpts(
     autostart: autostart ?? this.autostart,
     autostartDelay: autostartDelay ?? this.autostartDelay,
     immersive: immersive ?? this.immersive,
     lockLandscape: lockLandscape ?? this.lockLandscape,
     startLyricsFullscreen: startLyricsFullscreen ?? this.startLyricsFullscreen,
+    companionEnabled: companionEnabled ?? this.companionEnabled,
+    companionPackage: companionPackage ?? this.companionPackage,
+    companionLabel: companionLabel ?? this.companionLabel,
+    companionDelayMs: companionDelayMs ?? this.companionDelayMs,
   );
 
   @override
@@ -669,6 +748,10 @@ class CarStartupOpts with _JsonEquality {
     'immersive': immersive,
     'lockLandscape': lockLandscape,
     'startLyricsFullscreen': startLyricsFullscreen,
+    'companionEnabled': companionEnabled,
+    'companionPackage': companionPackage,
+    'companionLabel': companionLabel,
+    'companionDelayMs': companionDelayMs,
   };
 
   factory CarStartupOpts.fromJson(Object? json) {
@@ -680,8 +763,64 @@ class CarStartupOpts with _JsonEquality {
       immersive: _bool(m['immersive'], d.immersive),
       lockLandscape: _bool(m['lockLandscape'], d.lockLandscape),
       startLyricsFullscreen: _bool(m['startLyricsFullscreen'], d.startLyricsFullscreen),
+      companionEnabled: _bool(m['companionEnabled'], d.companionEnabled),
+      companionPackage: _str(m['companionPackage'], d.companionPackage, 256),
+      companionLabel: _str(m['companionLabel'], d.companionLabel, 128),
+      companionDelayMs: _num(m['companionDelayMs'], d.companionDelayMs.toDouble(), companionDelayRange).round(),
     );
   }
+}
+
+/// Hotspot del carro (la tableta comparte su conexión; el celular se conecta a ella).
+@immutable
+class CarHotspotOpts with _JsonEquality {
+  const CarHotspotOpts({this.autoEnable = false, this.recheckMinutes = 0, this.ssid = '', this.password = ''});
+
+  /// Al iniciar: verificar el hotspot y encenderlo si está apagado.
+  final bool autoEnable;
+
+  /// Volver a verificar cada N minutos (0 = solo al iniciar).
+  final int recheckMinutes;
+
+  /// Nombre y contraseña de la red (para el QR). Los escribe el usuario o se leen del sistema.
+  final String ssid;
+  final String password;
+
+  static const recheckRange = CarRange(0, 60, 5);
+
+  CarHotspotOpts copyWith({bool? autoEnable, int? recheckMinutes, String? ssid, String? password}) => CarHotspotOpts(
+    autoEnable: autoEnable ?? this.autoEnable,
+    recheckMinutes: recheckMinutes ?? this.recheckMinutes,
+    ssid: ssid ?? this.ssid,
+    password: password ?? this.password,
+  );
+
+  @override
+  Map<String, dynamic> toJson() => {
+    'autoEnable': autoEnable,
+    'recheckMinutes': recheckMinutes,
+    'ssid': ssid,
+    'password': password,
+  };
+
+  factory CarHotspotOpts.fromJson(Object? json) {
+    final m = _map(json);
+    const d = CarHotspotOpts();
+    return CarHotspotOpts(
+      autoEnable: _bool(m['autoEnable'], d.autoEnable),
+      recheckMinutes: _num(m['recheckMinutes'], d.recheckMinutes.toDouble(), recheckRange).round(),
+      ssid: _str(m['ssid'], d.ssid, 64),
+      password: _str(m['password'], d.password, 128),
+    );
+  }
+}
+
+/// Texto del QR para unirse a una red Wi-Fi (`WIFI:T:WPA;S:<ssid>;P:<clave>;;`), con los
+/// caracteres especiales escapados. Sin contraseña = red abierta (`T:nopass`).
+String wifiQrData(String ssid, String password) {
+  String esc(String v) => v.replaceAllMapped(RegExp(r'([\\;,:"])'), (m) => '\\${m[1]}');
+  if (password.isEmpty) return 'WIFI:T:nopass;S:${esc(ssid)};;';
+  return 'WIFI:T:WPA;S:${esc(ssid)};P:${esc(password)};;';
 }
 
 @immutable
@@ -721,6 +860,7 @@ class CarCustomization {
     this.texts = const CarTexts(),
     this.connection = const CarConnectionOpts(),
     this.startup = const CarStartupOpts(),
+    this.hotspot = const CarHotspotOpts(),
     this.gestures = const CarGestureOpts(),
   });
 
@@ -735,6 +875,7 @@ class CarCustomization {
   final CarTexts texts;
   final CarConnectionOpts connection;
   final CarStartupOpts startup;
+  final CarHotspotOpts hotspot;
   final CarGestureOpts gestures;
 
   /// Atajo: ¿se ve el elemento?
@@ -752,6 +893,7 @@ class CarCustomization {
     CarTexts? texts,
     CarConnectionOpts? connection,
     CarStartupOpts? startup,
+    CarHotspotOpts? hotspot,
     CarGestureOpts? gestures,
   }) => CarCustomization(
     design: design ?? this.design,
@@ -762,6 +904,7 @@ class CarCustomization {
     texts: texts ?? this.texts,
     connection: connection ?? this.connection,
     startup: startup ?? this.startup,
+    hotspot: hotspot ?? this.hotspot,
     gestures: gestures ?? this.gestures,
   );
 
@@ -775,6 +918,7 @@ class CarCustomization {
     CarSection.texts => copyWith(texts: const CarTexts()),
     CarSection.connection => copyWith(connection: const CarConnectionOpts()),
     CarSection.startup => copyWith(startup: const CarStartupOpts()),
+    CarSection.hotspot => copyWith(hotspot: const CarHotspotOpts()),
     CarSection.gestures => copyWith(gestures: const CarGestureOpts()),
   };
 
@@ -791,6 +935,7 @@ class CarCustomization {
     'texts': texts.toJson(),
     'connection': connection.toJson(),
     'startup': startup.toJson(),
+    'hotspot': hotspot.toJson(),
     'gestures': gestures.toJson(),
   };
 
@@ -807,6 +952,7 @@ class CarCustomization {
       texts: CarTexts.fromJson(m['texts']),
       connection: CarConnectionOpts.fromJson(m['connection']),
       startup: CarStartupOpts.fromJson(m['startup']),
+      hotspot: CarHotspotOpts.fromJson(m['hotspot']),
       gestures: CarGestureOpts.fromJson(m['gestures']),
     );
   }
@@ -833,10 +979,12 @@ class CarCustomization {
       other.texts == texts &&
       other.connection == connection &&
       other.startup == startup &&
+      other.hotspot == hotspot &&
       other.gestures == gestures;
 
   @override
-  int get hashCode => Object.hash(design, cover, visualizer, lyrics, visibility, texts, connection, startup, gestures);
+  int get hashCode =>
+      Object.hash(design, cover, visualizer, lyrics, visibility, texts, connection, startup, hotspot, gestures);
 }
 
 // ---------------------------------------------------------------------------
@@ -851,6 +999,8 @@ Map<String, dynamic> _map(Object? v) {
 double _num(Object? v, double def, CarRange r) => v is num && v.isFinite ? r.clamp(v.toDouble()) : def;
 
 bool _bool(Object? v, bool def) => v is bool ? v : def;
+
+String _str(Object? v, String def, int maxLen) => v is String ? (v.length > maxLen ? v.substring(0, maxLen) : v) : def;
 
 T _enum<T extends Enum>(List<T> values, Object? v, T def) {
   for (final e in values) {

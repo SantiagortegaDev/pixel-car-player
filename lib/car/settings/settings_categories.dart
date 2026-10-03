@@ -4,7 +4,9 @@ import 'package:material_symbols_icons/symbols.dart';
 import 'package:pixel_car_player/car/car_controller.dart';
 import 'package:pixel_car_player/car/custom/car_customization.dart';
 import 'package:pixel_car_player/car/settings/car_settings_page.dart';
+import 'package:pixel_car_player/car/custom/car_custom_scope.dart';
 import 'package:pixel_car_player/car/settings/settings_controls.dart';
+import 'package:pixel_car_player/car/settings/settings_system.dart';
 import 'package:pixel_car_player/car/widgets/hx.dart';
 import 'package:pixel_car_player/car/widgets/loading_indicator.dart';
 import 'package:pixel_car_player/core/theme/app_theme.dart';
@@ -14,6 +16,7 @@ import 'package:pixel_car_player/data/link/car_link_client.dart';
 /// Contenido de cada categoría de Configuración.
 List<Widget> buildCategory(CarSettingsCategory cat, CarController c, VoidCallback onChangeMode) => switch (cat) {
   CarSettingsCategory.conexion => [_ConnectionPage(c: c)],
+  CarSettingsCategory.hotspot => [HotspotSettings(c: c)],
   CarSettingsCategory.inicio => [_StartupPage(c: c)],
   CarSettingsCategory.diseno => [_DesignPage(c: c)],
   CarSettingsCategory.portada => [_CoverPage(c: c)],
@@ -445,6 +448,7 @@ class _StartupPageState extends State<_StartupPage> {
             ],
           ],
         ),
+        CompanionSettings(c: c),
         SettingsSection(
           icon: Symbols.open_in_full_rounded,
           title: 'Al abrir',
@@ -521,9 +525,52 @@ class _DesignPageState extends State<_DesignPage> {
     final hex = colorHex(d.fixedColor);
     if (!_hexFocus.hasFocus && _hex.text != hex) _hex.text = hex;
     final brightness = cs.brightness;
+    final systemReduced = carReducedMotion(context, c.cfg.copyWith(design: d.copyWith(motion: CarMotion.system)));
+    final reducedNow = carReducedMotion(context, c.cfg);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        SettingsSection(
+          icon: Symbols.animation_rounded,
+          title: 'Animaciones',
+          children: [
+            SettingsItem(
+              label: 'Animaciones',
+              desc:
+                  'Reducidas: la portada no gira, las barras y las formas de fondo quedan quietas, la barra de '
+                  'progreso es recta y los colores y textos cambian sin transición.',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SettingsSegmented<CarMotion>(
+                    key: const ValueKey('motion'),
+                    value: d.motion,
+                    options: const [
+                      (CarMotion.system, 'Sistema'),
+                      (CarMotion.full, 'Completas'),
+                      (CarMotion.reduced, 'Reducidas'),
+                    ],
+                    onChanged: (v) => c.design((x) => x.copyWith(motion: v)),
+                  ),
+                  const SizedBox(height: 12),
+                  SettingsStatus(
+                    ok: !reducedNow,
+                    okIcon: Symbols.animation_rounded,
+                    offIcon: Symbols.motion_photos_paused_rounded,
+                    text: switch (d.motion) {
+                      CarMotion.system =>
+                        systemReduced
+                            ? 'Ahora: reducidas (la tableta tiene «Quitar animaciones» activado)'
+                            : 'Ahora: completas (según la tableta)',
+                      CarMotion.full => 'Ahora: completas, aunque la tableta pida reducirlas',
+                      CarMotion.reduced => 'Ahora: reducidas',
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
         SettingsSection(
           icon: Symbols.palette_rounded,
           title: 'Color',
@@ -766,6 +813,59 @@ class _CoverPage extends StatelessWidget {
                 'Las barras están ocultas (Elementos visibles → Barras del visualizador).',
                 icon: Symbols.visibility_off_rounded,
               ),
+            SettingsItem(
+              label: 'Origen de las barras',
+              desc: switch (v.source) {
+                CarVizSource.auto =>
+                  'Usa el audio que suena en la tableta (también la app Bluetooth del radio). Si no lo detecta, '
+                      'un espectro simulado mientras suena.',
+                CarVizSource.real => 'Solo el audio real de la tableta. Sin audio, las barras quedan quietas.',
+                CarVizSource.simulated => 'Un espectro simulado mientras suena. No pide permisos.',
+              },
+              child: SettingsSegmented<CarVizSource>(
+                key: const ValueKey('viz-source'),
+                value: v.source,
+                options: const [
+                  (CarVizSource.auto, 'Automático'),
+                  (CarVizSource.real, 'Audio real'),
+                  (CarVizSource.simulated, 'Simulado'),
+                ],
+                onChanged: (x) => c.viz((d) => d.copyWith(source: x)),
+              ),
+            ),
+            if (v.wantsRealAudio) ...[
+              _AudioPermissionRow(c: c),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                child: SettingsStatus(
+                  ok: c.audioDetected,
+                  okIcon: Symbols.graphic_eq_rounded,
+                  offIcon: Symbols.volume_off_rounded,
+                  text: c.audioDetected
+                      ? 'Audio detectado: las barras siguen la música'
+                      : c.visualizerRunning
+                      ? 'Escuchando… sin audio por ahora'
+                      : 'El visualizador con el audio real no está activo',
+                ),
+              ),
+              SettingsSlider(
+                label: 'Sensibilidad',
+                desc: 'Súbela si con el audio real las barras se mueven poco.',
+                value: v.sensitivity,
+                range: CarVisualizerOpts.sensitivityRange,
+                defaultValue: 1,
+                format: _x,
+                onChanged: (x) => c.viz((d) => d.copyWith(sensitivity: x)),
+              ),
+            ],
+            SettingsSwitch(
+              label: 'Animar siempre',
+              description:
+                  'Las barras, el giro y las formas se mueven aunque no se sepa si está sonando (p. ej. si la app '
+                  'Bluetooth del radio no avisa).',
+              value: v.animateAlways,
+              onChanged: (x) => c.viz((d) => d.copyWith(animateAlways: x)),
+            ),
             SettingsSlider(
               label: 'Amplificación de las líneas',
               desc: 'Qué tan largas se estiran las barras. Si no caben, la portada se achica un poco.',
@@ -839,6 +939,42 @@ class _CoverPage extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+/// Permiso de audio para el visualizador real (Android lo llama "micrófono").
+class _AudioPermissionRow extends StatelessWidget {
+  const _AudioPermissionRow({required this.c});
+  final CarController c;
+
+  @override
+  Widget build(BuildContext context) {
+    final granted = c.audioPermission == true || c.visualizerRunning;
+    final supported = NativeBridge.instance.isSupported;
+    return SettingsActionRow(
+      icon: granted ? Symbols.check_rounded : Symbols.mic_rounded,
+      warning: supported && c.audioPermission == false,
+      label: 'Permiso de audio',
+      desc: granted
+          ? 'Concedido. Pixel Car Player lee el audio que suena en la tableta para mover las barras.'
+          : 'Android lo llama «micrófono»: hace falta para leer el audio que suena en la tableta. No se graba '
+                'ni se envía nada.',
+      action: granted
+          ? const SettingsStatus(ok: true, text: 'Listo')
+          : HxButton(
+              label: 'Dar permiso',
+              height: 48,
+              onTap: () async {
+                final ok = await c.requestAudioPermission();
+                if (!context.mounted) return;
+                if (!supported) {
+                  showHxSnack(context, 'Solo funciona en la tableta.');
+                } else if (!ok) {
+                  showHxSnack(context, 'Sin permiso. Puedes darlo en Ajustes de Android → Apps → Pixel Car Player.');
+                }
+              },
+            ),
     );
   }
 }

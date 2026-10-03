@@ -21,9 +21,7 @@ class DemoTrack {
   final LyricsStatus lyricsStatus;
 }
 
-List<LyricLine> _lrc(List<(int, String)> raw) => [
-  for (final (s, t) in raw) LyricLine(Duration(milliseconds: s), t),
-];
+List<LyricLine> _lrc(List<(int, String)> raw) => [for (final (s, t) in raw) LyricLine(Duration(milliseconds: s), t)];
 
 /// "Luces de Neón" — Harmonix Band (letra original para la demo).
 final _neonLyrics = _lrc([
@@ -225,17 +223,18 @@ class DemoSource {
     _out.add(TrackMessage(t.info));
     _emitState();
     _out.add(LyricsMessage(id: t.info.id, status: LyricsStatus.loading));
-    _out.add(QueueMessage([
-      for (var k = 1; k < demoTracks.length; k++)
-        QueueItem(
-          title: demoTracks[(_index + k) % demoTracks.length].info.title,
-          artist: demoTracks[(_index + k) % demoTracks.length].info.artist,
-        ),
-      ...demoQueueExtras,
-    ]));
+    _out.add(
+      QueueMessage([
+        for (var k = 1; k < demoTracks.length; k++)
+          QueueItem(
+            title: demoTracks[(_index + k) % demoTracks.length].info.title,
+            artist: demoTracks[(_index + k) % demoTracks.length].info.artist,
+          ),
+        ...demoQueueExtras,
+      ]),
+    );
     try {
-      final bytes = _artCache[t.coverAsset] ??= (await rootBundle.load(t.coverAsset)).buffer
-          .asUint8List();
+      final bytes = _artCache[t.coverAsset] ??= (await rootBundle.load(t.coverAsset)).buffer.asUint8List();
       if (current.info.id == t.info.id) {
         _out.add(ArtMessage(id: t.info.id, mime: 'image/png', bytes: bytes));
       }
@@ -244,9 +243,7 @@ class DemoSource {
     }
     await Future<void>.delayed(const Duration(milliseconds: 350));
     if (current.info.id != t.info.id || _out.isClosed) return;
-    _out.add(
-      LyricsMessage(id: t.info.id, status: t.lyricsStatus, synced: t.synced, lines: t.lyrics),
-    );
+    _out.add(LyricsMessage(id: t.info.id, status: t.lyricsStatus, synced: t.synced, lines: t.lyrics));
   }
 
   void _go(int delta) {
@@ -295,3 +292,15 @@ class DemoSource {
     await _out.close();
   }
 }
+
+/// Apps de ejemplo para el selector de "App acompañante" en la demo web (en la tableta
+/// salen de `getLaunchableApps`).
+const demoLaunchableApps = <Map<String, dynamic>>[
+  {'package': 'com.syu.bt', 'label': 'Música Bluetooth'},
+  {'package': 'com.android.fmradio', 'label': 'Radio FM'},
+  {'package': 'com.google.android.apps.maps', 'label': 'Maps'},
+  {'package': 'com.spotify.music', 'label': 'Spotify'},
+  {'package': 'com.waze', 'label': 'Waze'},
+  {'package': 'com.google.android.youtube', 'label': 'YouTube'},
+  {'package': 'com.google.android.apps.youtube.music', 'label': 'YouTube Music'},
+];

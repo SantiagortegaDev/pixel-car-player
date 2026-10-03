@@ -12,6 +12,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 ///  - `car_customization`: todo el modelo en JSON.
 ///  - `car_autostart` (bool) y `car_autostart_delay` (int, s): aparte, porque los lee
 ///    el BootReceiver nativo.
+///  - `car_companion_package` (String, vacío = apagado) y `car_companion_delay` (int, ms):
+///    la app acompañante, también para el BootReceiver.
 class CarCustomizationStore extends ChangeNotifier {
   CarCustomizationStore([CarCustomization initial = CarCustomization.defaults, this.persist = false])
     : _value = initial;
@@ -43,10 +45,18 @@ class CarCustomizationStore extends ChangeNotifier {
       // Las claves del inicio automático mandan (las puede tocar otra versión de la app).
       final auto = p.getBool(CarPrefs.kAutostart);
       final delay = p.getInt(CarPrefs.kAutostartDelay);
+      final companion = p.getString(CarPrefs.kCompanionPackage);
+      final companionDelay = p.getInt(CarPrefs.kCompanionDelay);
       v = v.copyWith(
         startup: v.startup.copyWith(
           autostart: auto,
           autostartDelay: delay == null ? null : CarStartupOpts.delayRange.clamp(delay.toDouble()).round(),
+          // Vacío = apagado (se conserva la app elegida); un paquete = encendido con esa app.
+          companionEnabled: companion?.isNotEmpty,
+          companionPackage: companion == null || companion.isEmpty ? null : companion,
+          companionDelayMs: companionDelay == null
+              ? null
+              : CarStartupOpts.companionDelayRange.clamp(companionDelay.toDouble()).round(),
         ),
       );
       return CarCustomizationStore(v, true);
@@ -96,6 +106,8 @@ class CarCustomizationStore extends ChangeNotifier {
       await p.setString(key, jsonEncode(_value.toJson()));
       await p.setBool(CarPrefs.kAutostart, _value.startup.autostart);
       await p.setInt(CarPrefs.kAutostartDelay, _value.startup.autostartDelay);
+      await p.setString(CarPrefs.kCompanionPackage, _value.startup.companionToLaunch);
+      await p.setInt(CarPrefs.kCompanionDelay, _value.startup.companionDelayMs);
     } catch (e) {
       debugPrint('CarCustomizationStore: no se pudo guardar ($e)');
     }

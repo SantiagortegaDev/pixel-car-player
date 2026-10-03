@@ -19,6 +19,7 @@ class HxWavySlider extends StatefulWidget {
     required this.onSeek,
     this.height = 12,
     this.waveAmplitude = 1,
+    this.reduced,
   });
 
   /// Posición "en vivo" (se lee en cada cuadro mientras suena).
@@ -30,6 +31,9 @@ class HxWavySlider extends StatefulWidget {
 
   /// Multiplicador de la amplitud de la onda (0 = recta).
   final double waveAmplitude;
+
+  /// Animaciones reducidas: línea recta, sin onda ni suavizado (`null` = la del sistema).
+  final bool? reduced;
 
   static const frequency = 5.0;
   static const waveMs = 2000.0;
@@ -53,7 +57,8 @@ class _HxWavySliderState extends State<HxWavySlider> with TickerProviderStateMix
   Duration _last = Duration.zero;
   double _width = 300;
 
-  bool get _reduced => WidgetsBinding.instance.platformDispatcher.accessibilityFeatures.disableAnimations;
+  bool get _reduced =>
+      widget.reduced ?? WidgetsBinding.instance.platformDispatcher.accessibilityFeatures.disableAnimations;
 
   double get _max => widget.duration.inMilliseconds.toDouble();
 

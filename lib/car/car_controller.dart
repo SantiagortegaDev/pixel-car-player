@@ -3,9 +3,11 @@ import 'dart:ui' show Brightness, Color, PlatformDispatcher;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show ColorScheme;
+import 'package:pixel_car_player/car/audio/car_audio_levels.dart';
 import 'package:pixel_car_player/car/custom/car_customization.dart';
 import 'package:pixel_car_player/car/custom/car_customization_store.dart';
 import 'package:pixel_car_player/car/lyrics/lrclib_client.dart';
+import 'package:pixel_car_player/car/system/car_hotspot.dart';
 import 'package:pixel_car_player/core/models/now_playing.dart';
 import 'package:pixel_car_player/core/theme/app_theme.dart';
 import 'package:pixel_car_player/data/bridge/native_bridge.dart';
@@ -44,7 +46,11 @@ class CarController extends ChangeNotifier {
     LrcLibClient? lrclib,
     DemoSource Function()? demoFactory,
     Future<Color> Function(Uint8List artwork)? seedBuilder,
+    CarHotspot? hotspot,
+    CarAudioLevels? audio,
   }) : _bridge = bridge ?? NativeBridge.instance,
+       hotspot = hotspot ?? CarHotspot(bridge: bridge),
+       audio = audio ?? CarAudioLevels(),
        prefs = prefs ?? CarPrefs(demo: demo),
        _ownsCustom = custom == null,
        custom = custom ?? CarCustomizationStore(),
@@ -64,7 +70,10 @@ class CarController extends ChangeNotifier {
           maxBackoff: Duration(seconds: conn.reconnectSeconds),
         );
     _lastConnection = conn;
+    _lastViz = this.custom.value.visualizer;
+    _lastHotspot = this.custom.value.hotspot;
     this.custom.addListener(_onCustom);
+    this.audio.detected.addListener(_changed);
   }
 
   final NativeBridge _bridge;
@@ -75,6 +84,26 @@ class CarController extends ChangeNotifier {
   final CarCustomizationStore custom;
   final bool _ownsCustom;
   late CarConnectionOpts _lastConnection;
+  late CarVisualizerOpts _lastViz;
+  late CarHotspotOpts _lastHotspot;
+
+  /// Hotspot del carro (Configuración → Hotspot).
+  final CarHotspot hotspot;
+
+  /// Audio real de la tableta para el visualizador.
+  final CarAudioLevels audio;
+
+  /// Resultado del último pedido de permiso de audio (`null` = aún no se pidió).
+  bool? audioPermission;
+
+  /// El Visualizer nativo está corriendo.
+  bool visualizerRunning = false;
+  bool _audioAsked = false;
+  bool _foreground = true;
+  Future<void> _vizOp = Future.value();
+
+  /// Se abrió la app acompañante en este arranque.
+  bool companionLaunched = false;
 
   CarCustomization get cfg => custom.value;
 
@@ -177,6 +206,24 @@ class CarController extends ChangeNotifier {
 
   ColorScheme get scheme => schemeFor();
 
+  /// Hay audio real sonando en la tableta (y el visualizador lo usa).
+  bool get audioDetected => cfg.visualizer.wantsRealAudio && audio.detected.value;
+
+  /// Las barras salen del audio real (si no, del espectro simulado).
+  bool get useRealAudio => switch (cfg.visualizer.source) {
+    CarVizSource.real => true,
+    CarVizSource.simulated => false,
+    CarVizSource.auto => audio.detected.value,
+  };
+
+  /// ¿Animar el visualizador, el giro de la portada y las formas de fondo? Suena según el
+  /// celular / la sesión local, o se detectó audio real, o "Animar siempre".
+  bool get visualActive {
+    final np = nowPlaying;
+    if (np.track == null) return false;
+    return np.playing || audioDetected || cfg.visualizer.animateAlways;
+  }
+
   // ---------------------------------------------------------------------------
 
   Future<void> start() async {
@@ -194,12 +241,94 @@ class CarController extends ChangeNotifier {
       unawaited(_bridge.startLocalMediaWatch());
     }
     _msgSub ??= link.messages.listen(apply);
+    // Cosas del sistema que no deben esperar a la conexión.
+    unawaited(syncVisualizer());
+    _syncHotspot(initial: true);
+    unawaited(launchCompanionOnStart());
     if (demo) {
       await _startDemo();
     } else if (cfg.connection.autoConnect) {
       await _startLink();
     }
     _syncIdleDemo();
+  }
+
+  // ---- Visualizador con el audio real ----
+
+  /// Arranca o detiene el Visualizer nativo según el ajuste y si la app está al frente.
+  /// La primera vez pide el permiso de audio.
+  Future<void> syncVisualizer() => _vizOp = _vizOp.then((_) => _syncVisualizer()).catchError((Object e) {
+    debugPrint('visualizer: $e');
+  });
+
+  Future<void> _syncVisualizer() async {
+    if (_disposed) return;
+    final want = _started && _foreground && cfg.visualizer.wantsRealAudio && _bridge.isSupported;
+    if (want && !visualizerRunning) {
+      if (!_audioAsked) {
+        _audioAsked = true;
+        audioPermission = await _bridge.requestAudioPermission();
+        if (_disposed) return;
+      }
+      visualizerRunning = await _bridge.startVisualizer();
+      // Si arrancó es porque hay permiso (p. ej. se dio desde los ajustes del sistema).
+      if (visualizerRunning) audioPermission = true;
+      _changed();
+    } else if (!want && visualizerRunning) {
+      visualizerRunning = false;
+      await _bridge.stopVisualizer();
+      audio.reset();
+      _changed();
+    }
+  }
+
+  /// Botón "Dar permiso" de Configuración.
+  Future<bool> requestAudioPermission() async {
+    audioPermission = await _bridge.requestAudioPermission();
+    _audioAsked = true;
+    _changed();
+    if (audioPermission == true) await syncVisualizer();
+    return audioPermission ?? false;
+  }
+
+  /// La app pasó a segundo plano / volvió al frente: el Visualizer solo corre al frente.
+  void setForeground(bool fg) {
+    if (fg == _foreground) return;
+    _foreground = fg;
+    if (_started) unawaited(syncVisualizer());
+  }
+
+  // ---- Hotspot ----
+
+  void _syncHotspot({bool initial = false}) {
+    if (!_started || _disposed) return;
+    final h = cfg.hotspot;
+    hotspot.schedule(h.autoEnable ? h.recheckMinutes : 0);
+    if (h.autoEnable && (initial || !_lastHotspot.autoEnable)) {
+      unawaited(hotspot.ensureOn());
+    } else if (initial && _bridge.isSupported) {
+      unawaited(hotspot.refresh());
+    }
+  }
+
+  // ---- App acompañante ----
+
+  /// Al arrancar (una vez): abre la app acompañante detrás.
+  Future<void> launchCompanionOnStart() async {
+    final s = cfg.startup;
+    final pkg = s.companionToLaunch;
+    if (companionLaunched || pkg.isEmpty || !_bridge.isSupported) return;
+    companionLaunched = true;
+    // Si nos abrió el receptor de arranque, la acompañante ya está abierta detrás.
+    if (await _bridge.consumeBootLaunch()) return;
+    await _bridge.launchApp(pkg, background: true, delayMs: s.companionDelayMs);
+  }
+
+  /// "Probar ahora".
+  Future<bool> launchCompanionNow() {
+    final s = cfg.startup;
+    if (s.companionPackage.isEmpty) return Future.value(false);
+    return _bridge.launchApp(s.companionPackage, background: true, delayMs: s.companionDelayMs);
   }
 
   Future<void> _startLink() async {
@@ -235,6 +364,18 @@ class CarController extends ChangeNotifier {
       if (conn.autoConnect && !old.autoConnect && !_linkStarted && !demo && _started) unawaited(_startLink());
       _syncIdleDemo();
     }
+    final viz = cfg.visualizer;
+    if (viz.source != _lastViz.source) {
+      _lastViz = viz;
+      if (!viz.wantsRealAudio) audio.reset();
+      unawaited(syncVisualizer());
+    }
+    _lastViz = viz;
+    final hs = cfg.hotspot;
+    if (hs.autoEnable != _lastHotspot.autoEnable || hs.recheckMinutes != _lastHotspot.recheckMinutes) {
+      _syncHotspot();
+    }
+    _lastHotspot = hs;
     _changed();
   }
 
@@ -384,6 +525,11 @@ class CarController extends ChangeNotifier {
   String? _lyricsRequestedFor;
 
   void _onNative(Map<String, dynamic> e) {
+    if (e['type'] == 'fft') {
+      // Sin reconstruir la UI: el disco lee los niveles en cada cuadro.
+      if (cfg.visualizer.wantsRealAudio) audio.onEvent(e);
+      return;
+    }
     if (e['type'] != 'localMedia') return;
     final title = (e['title'] as String?) ?? '';
     if (title.isEmpty) {
@@ -552,6 +698,10 @@ class CarController extends ChangeNotifier {
     _disposed = true;
     custom.removeListener(_onCustom);
     if (_ownsCustom) custom.dispose();
+    audio.detected.removeListener(_changed);
+    audio.dispose();
+    hotspot.dispose();
+    if (visualizerRunning) _bridge.stopVisualizer();
     _ticker?.cancel();
     _ipTimer?.cancel();
     _msgSub?.cancel();

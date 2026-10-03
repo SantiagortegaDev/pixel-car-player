@@ -277,9 +277,12 @@ class HxMotion {
 /// Transición de tema de Harmonix v2: todos los tokens a la vez, interpolados en OKLab
 /// con ease-in-out cúbico durante 900 ms (lib/theme.js `applySeed`).
 class HxAnimatedTheme extends StatefulWidget {
-  const HxAnimatedTheme({super.key, required this.scheme, required this.child});
+  const HxAnimatedTheme({super.key, required this.scheme, required this.child, this.duration = HxMotion.dTheme});
   final ColorScheme scheme;
   final Widget child;
+
+  /// Duración de la transición; `Duration.zero` = cambio instantáneo (animaciones reducidas).
+  final Duration duration;
 
   @override
   State<HxAnimatedTheme> createState() => _HxAnimatedThemeState();
@@ -307,6 +310,13 @@ class _HxAnimatedThemeState extends State<HxAnimatedTheme>
   void didUpdateWidget(HxAnimatedTheme old) {
     super.didUpdateWidget(old);
     if (old.scheme != widget.scheme) {
+      if (widget.duration == Duration.zero) {
+        _c.stop();
+        _from = _shown = widget.scheme;
+        _theme = AppTheme.build(widget.scheme);
+        return;
+      }
+      _c.duration = widget.duration;
       _from = _shown; // arranca desde lo que se ve ahora
       _c.forward(from: 0);
     }

@@ -17,8 +17,8 @@ import 'package:provider/provider.dart';
 ///
 /// En web (capturas) se aceptan:
 ///  - `?lyrics=1`: abre directo la letra en pantalla completa.
-///  - `?settings=<id>`: abre Configuración en esa categoría (`conexion`, `inicio`,
-///    `diseno`, `portada`, `visibles`, `textos`, `letra`, `avanzado`).
+///  - `?settings=<id>`: abre Configuración en esa categoría (`conexion`, `hotspot`,
+///    `inicio`, `diseno`, `portada`, `visibles`, `textos`, `letra`, `avanzado`).
 ///  - `?custom=<json>` (codificado para URL, o en base64url): personalización inicial
 ///    (no se guarda).
 class CarRoot extends StatefulWidget {
@@ -30,14 +30,30 @@ class CarRoot extends StatefulWidget {
   State<CarRoot> createState() => _CarRootState();
 }
 
-class _CarRootState extends State<CarRoot> {
+class _CarRootState extends State<CarRoot> with WidgetsBindingObserver {
   CarController? _ctrl;
   CarStartupOpts? _appliedStartup;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _init();
+  }
+
+  /// El visualizador con el audio real solo corre con la app al frente.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final c = _ctrl;
+    if (c == null) return;
+    switch (state) {
+      case AppLifecycleState.resumed:
+        c.setForeground(true);
+      case AppLifecycleState.paused || AppLifecycleState.hidden || AppLifecycleState.detached:
+        c.setForeground(false);
+      case AppLifecycleState.inactive:
+        break;
+    }
   }
 
   Future<void> _init() async {
@@ -119,6 +135,7 @@ class _CarRootState extends State<CarRoot> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     final c = _ctrl;
     if (c != null) {
       c.custom.removeListener(_applySystem);

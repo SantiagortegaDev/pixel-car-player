@@ -25,8 +25,10 @@ import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
 
-    private companion object {
-        const val PERMISSION_REQUEST_BASE = 4732
+    companion object {
+        private const val PERMISSION_REQUEST_BASE = 4732
+        /** Extra que pone BootReceiver: la app acompañante ya se abrió al encender. */
+        const val EXTRA_FROM_BOOT = "pcp_from_boot"
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -206,6 +208,11 @@ class MainActivity : FlutterActivity() {
                     }
                     result.success(ok)
                 }
+            }
+            "consumeBootLaunch" -> {
+                val fromBoot = intent?.getBooleanExtra(EXTRA_FROM_BOOT, false) == true
+                intent?.removeExtra(EXTRA_FROM_BOOT)
+                result.success(fromBoot)
             }
             "bringToFront" -> {
                 AppLauncher.bringToFront(ctx, taskId)

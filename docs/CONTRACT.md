@@ -79,6 +79,7 @@ La tableta interpola la posición con su propio reloj desde el instante en que r
 | `getLaunchableApps` | — | `[{package, label, icon: Uint8List? (PNG 96 px)}]` ordenado por `label`, sin esta app | tableta |
 | `launchApp` | `{package, background: bool = true, delayMs: int = 1500}` | `bool` (se abrió); con `background` vuelve a traer esta app al frente tras `delayMs` | tableta |
 | `bringToFront` | — | — (`REORDER_TO_FRONT` + `moveTaskToFront`) | tableta |
+| `consumeBootLaunch` | — | `bool` (true una sola vez si la abrió `BootReceiver`, que ya lanzó la app acompañante) | tableta |
 | `setHotspotAutoConnect` | `{ssid, password, enabled}` (`password` vacío = red abierta; si no, 8–63 caracteres) | `{ok, method: 'suggestion'\|'legacy'\|'none', error: String?}` — API 29+ `WifiNetworkSuggestion` (reemplaza la del mismo SSID; `enabled:false` la quita); < 29 `WifiConfiguration` guardada. `error` es un texto en español apto para mostrar, con el código entre paréntesis (p. ej. `(appDisallowed)`) | celular |
 | `getWifiStatus` | — | `{connected: bool, ssid: String?}` (ssid null sin permiso/servicio de ubicación) | celular |
 

@@ -81,6 +81,8 @@ class BootReceiver : BroadcastReceiver() {
                     Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED or
                         Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                 )
+                // La app acompañante ya se abrió aquí: Dart no debe volver a abrirla.
+                putExtra(MainActivity.EXTRA_FROM_BOOT, true)
             }
             ctx.startActivity(i)
         } catch (e: Exception) {

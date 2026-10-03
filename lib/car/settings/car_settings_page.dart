@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:pixel_car_player/car/car_controller.dart';
 import 'package:pixel_car_player/car/car_player_screen.dart';
+import 'package:pixel_car_player/car/custom/car_custom_scope.dart';
 import 'package:pixel_car_player/car/custom/car_customization.dart';
 import 'package:pixel_car_player/car/settings/settings_categories.dart';
 import 'package:pixel_car_player/car/widgets/hx.dart';
@@ -11,10 +12,15 @@ import 'package:provider/provider.dart';
 /// Categorías de Configuración (el nombre del enum es el id de `?settings=` en web).
 enum CarSettingsCategory {
   conexion('Conexión', Symbols.link_rounded, [CarSection.connection], 'Cómo encuentra la tableta a tu celular.'),
+  hotspot('Hotspot', Symbols.wifi_tethering_rounded, [
+    CarSection.hotspot,
+  ], 'La red Wi-Fi del carro: la tableta la comparte y el celular se conecta a ella.'),
   inicio('Inicio', Symbols.power_settings_new_rounded, [
     CarSection.startup,
-  ], 'Qué pasa al encender el carro y al abrir la app.'),
-  diseno('Diseño', Symbols.palette_rounded, [CarSection.design], 'Colores, tamaños, barra de progreso y fondo.'),
+  ], 'Qué pasa al encender el carro y al abrir la app, y la app acompañante.'),
+  diseno('Diseño', Symbols.palette_rounded, [
+    CarSection.design,
+  ], 'Animaciones, colores, tamaños, barra de progreso y fondo.'),
   portada('Portada y visualizador', Symbols.album_rounded, [
     CarSection.cover,
     CarSection.visualizer,
@@ -113,54 +119,58 @@ class _CarSettingsPageState extends State<CarSettingsPage> {
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: c,
-      builder: (context, _) => HxAnimatedTheme(
-        scheme: c.schemeFor(MediaQuery.platformBrightnessOf(context)),
-        child: Builder(
-          builder: (context) {
-            final cs = context.cs;
-            return Scaffold(
-              backgroundColor: cs.surface,
-              body: CarScaler(
-                builder: (context, size) {
-                  final railW = size.width >= 1200 ? 280.0 : 236.0;
-                  final sidePreview = _cat.hasPreview && size.width >= 1180;
-                  final previewW = (size.width * 0.32).clamp(340.0, 640.0);
-                  return SafeArea(
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        SizedBox(
-                          width: railW,
-                          child: _Rail(selected: _cat, onSelect: (v) => setState(() => _cat = v)),
-                        ),
-                        Expanded(child: _content(context, inlinePreview: _cat.hasPreview && !sidePreview)),
-                        if (sidePreview)
+      builder: (context, _) => CarCustomScope(
+        value: c.cfg,
+        child: HxAnimatedTheme(
+          scheme: c.schemeFor(MediaQuery.platformBrightnessOf(context)),
+          duration: carReducedMotion(context, c.cfg) ? Duration.zero : HxMotion.dTheme,
+          child: Builder(
+            builder: (context) {
+              final cs = context.cs;
+              return Scaffold(
+                backgroundColor: cs.surface,
+                body: CarScaler(
+                  builder: (context, size) {
+                    final railW = size.width >= 1200 ? 280.0 : 236.0;
+                    final sidePreview = _cat.hasPreview && size.width >= 1180;
+                    final previewW = (size.width * 0.32).clamp(340.0, 640.0);
+                    return SafeArea(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
                           SizedBox(
-                            width: previewW,
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(0, 24, 24, 24),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  const _PreviewLabel(),
-                                  const SizedBox(height: 10),
-                                  CarPreview(controller: c),
-                                  const SizedBox(height: 12),
-                                  Text(
-                                    'Los cambios se aplican al instante y se guardan solos.',
-                                    style: context.tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-                                  ),
-                                ],
+                            width: railW,
+                            child: _Rail(selected: _cat, onSelect: (v) => setState(() => _cat = v)),
+                          ),
+                          Expanded(child: _content(context, inlinePreview: _cat.hasPreview && !sidePreview)),
+                          if (sidePreview)
+                            SizedBox(
+                              width: previewW,
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(0, 24, 24, 24),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    const _PreviewLabel(),
+                                    const SizedBox(height: 10),
+                                    CarPreview(controller: c),
+                                    const SizedBox(height: 12),
+                                    Text(
+                                      'Los cambios se aplican al instante y se guardan solos.',
+                                      style: context.tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
-                          ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-            );
-          },
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              );
+            },
+          ),
         ),
       ),
     );

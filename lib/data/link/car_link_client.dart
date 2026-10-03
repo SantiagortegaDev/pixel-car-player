@@ -17,11 +17,8 @@ class LinkStatus {
   static const disconnected = LinkStatus._(LinkPhase.disconnected);
   static const searching = LinkStatus._(LinkPhase.searching);
 
-  const LinkStatus.connected({
-    required String device,
-    required String transport,
-    required String address,
-  }) : this._(LinkPhase.connected, device: device, transport: transport, address: address);
+  const LinkStatus.connected({required String device, required String transport, required String address})
+    : this._(LinkPhase.connected, device: device, transport: transport, address: address);
 
   final LinkPhase phase;
 
@@ -36,9 +33,8 @@ class LinkStatus {
 
   bool get isConnected => phase == LinkPhase.connected;
 
-  LinkStatus withDevice(String d) => isConnected
-      ? LinkStatus.connected(device: d, transport: transport!, address: address!)
-      : this;
+  LinkStatus withDevice(String d) =>
+      isConnected ? LinkStatus.connected(device: d, transport: transport!, address: address!) : this;
 
   @override
   bool operator ==(Object other) =>
@@ -146,13 +142,7 @@ class CarLinkClient {
   }
 
   /// Cambia la configuración y fuerza un nuevo intento de conexión.
-  void configure({
-    String? manualIp,
-    String? btAddress,
-    String? btName,
-    bool? useWifi,
-    Duration? maxBackoff,
-  }) {
+  void configure({String? manualIp, String? btAddress, String? btName, bool? useWifi, Duration? maxBackoff}) {
     this.manualIp = manualIp;
     this.btAddress = btAddress;
     this.btName = btName;
@@ -225,8 +215,8 @@ class CarLinkClient {
       if (conn == null) {
         await _sleep(backoff);
         backoff = Duration(
-            milliseconds: math.min(
-                backoff.inMilliseconds * 2, math.max(1000, maxBackoff.inMilliseconds)));
+          milliseconds: math.min(backoff.inMilliseconds * 2, math.max(1000, maxBackoff.inMilliseconds)),
+        );
         continue;
       }
       backoff = const Duration(seconds: 1);
@@ -240,30 +230,21 @@ class CarLinkClient {
     final now = DateTime.now();
     _beacons.removeWhere((_, b) => now.difference(b.at) > const Duration(seconds: 15));
 
-    final targets = <String, int>{};
-    for (final e in _beacons.entries) {
-      targets[e.key] = e.value.port;
-    }
     final gw = useWifi ? await _bridge.getGatewayIp() : null;
-    if (gw != null && gw.isNotEmpty && gw != '0.0.0.0') {
-      targets.putIfAbsent(gw, () => LinkProtocol.tcpPort);
-    }
-    final manual = manualIp?.trim();
-    if (manual != null && manual.isNotEmpty) {
-      final parts = manual.split(':');
-      targets.putIfAbsent(
-        parts.first,
-        () => parts.length > 1
-            ? int.tryParse(parts[1]) ?? LinkProtocol.tcpPort
-            : LinkProtocol.tcpPort,
-      );
-    }
+    // Con el hotspot de la tableta encendido, el celular es un cliente: sus IPs están en
+    // la tabla de vecinos (ARP). Se refresca en cada intento.
+    final neighbors = useWifi ? await _bridge.getNeighborIps() : const <String>[];
+    final targets = buildTargets(
+      beacons: {for (final e in _beacons.entries) e.key: e.value.port},
+      gateway: gw,
+      manualIp: manualIp,
+      neighbors: neighbors,
+    );
 
     final attempts = <Future<LinkConnection?>>[
       if (socketsSupported && useWifi)
         for (final t in targets.entries) connectTcp(t.key, t.value),
-      if (btAddress != null && btAddress!.isNotEmpty && _bridge.isSupported)
-        _connectRfcomm(btAddress!),
+      if (btAddress != null && btAddress!.isNotEmpty && _bridge.isSupported) _connectRfcomm(btAddress!),
     ];
     if (attempts.isEmpty) return null;
 
@@ -283,6 +264,46 @@ class CarLinkClient {
     return winner.future;
   }
 
+  /// Máximo de IPs vecinas que se prueban por intento.
+  static const maxNeighbors = 24;
+
+  /// Destinos TCP (IP → puerto) de un intento, en orden de prioridad: beacons recientes,
+  /// gateway (hotspot del celular), IP manual (`ip` o `ip:puerto`) y vecinos (hotspot de
+  /// la tableta). Sin duplicados; se descartan direcciones vacías / `0.0.0.0`.
+  @visibleForTesting
+  static Map<String, int> buildTargets({
+    Map<String, int> beacons = const {},
+    String? gateway,
+    String? manualIp,
+    List<String> neighbors = const [],
+  }) {
+    bool valid(String? ip) => ip != null && ip.isNotEmpty && ip != '0.0.0.0';
+    final targets = <String, int>{};
+    for (final e in beacons.entries) {
+      if (valid(e.key)) targets[e.key] = e.value;
+    }
+    final gw = gateway?.trim();
+    if (valid(gw)) targets.putIfAbsent(gw!, () => LinkProtocol.tcpPort);
+    final manual = manualIp?.trim();
+    if (manual != null && manual.isNotEmpty) {
+      final parts = manual.split(':');
+      if (valid(parts.first)) {
+        targets.putIfAbsent(
+          parts.first,
+          () => parts.length > 1 ? int.tryParse(parts[1]) ?? LinkProtocol.tcpPort : LinkProtocol.tcpPort,
+        );
+      }
+    }
+    var added = 0;
+    for (final raw in neighbors) {
+      final ip = raw.trim();
+      if (!valid(ip) || targets.containsKey(ip)) continue;
+      if (added++ >= maxNeighbors) break;
+      targets[ip] = LinkProtocol.tcpPort;
+    }
+    return targets;
+  }
+
   Future<LinkConnection?> _connectRfcomm(String address) async {
     final conn = _RfcommConnection(_bridge, address);
     final ok = await _bridge.connectRfcomm(address);
@@ -296,14 +317,8 @@ class CarLinkClient {
   Future<void> _serve(LinkConnection conn) async {
     _conn = conn;
     final beacon = _beacons[conn.remoteAddress];
-    final initialName = conn.transport == 'bt'
-        ? (btName ?? 'Celular')
-        : (beacon?.device ?? 'Celular');
-    status.value = LinkStatus.connected(
-      device: initialName,
-      transport: conn.transport,
-      address: conn.remoteAddress,
-    );
+    final initialName = conn.transport == 'bt' ? (btName ?? 'Celular') : (beacon?.device ?? 'Celular');
+    status.value = LinkStatus.connected(device: initialName, transport: conn.transport, address: conn.remoteAddress);
 
     final done = Completer<void>();
     Timer? dog;

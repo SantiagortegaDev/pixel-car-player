@@ -18,6 +18,7 @@ class BackgroundShapes extends StatefulWidget {
     this.seed,
     this.opacity = 1,
     this.animate = true,
+    this.reduced,
   });
 
   final bool playing;
@@ -31,6 +32,9 @@ class BackgroundShapes extends StatefulWidget {
 
   /// `false` = quietas aunque suene la música.
   final bool animate;
+
+  /// Animaciones reducidas (`null` = la preferencia del sistema).
+  final bool? reduced;
 
   static const pool = [
     'circle',
@@ -128,7 +132,8 @@ class _BackgroundShapesState extends State<BackgroundShapes> with SingleTickerPr
     }
   }
 
-  bool get _reducedMotion => WidgetsBinding.instance.platformDispatcher.accessibilityFeatures.disableAnimations;
+  bool get _reducedMotion =>
+      widget.reduced ?? WidgetsBinding.instance.platformDispatcher.accessibilityFeatures.disableAnimations;
 
   void _tick(Duration now) {
     final dt = _last == Duration.zero ? 0.0 : math.min(0.1, (now - _last).inMicroseconds / 1e6);

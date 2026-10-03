@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
+import 'package:pixel_car_player/car/custom/car_custom_scope.dart';
 import 'package:pixel_car_player/core/theme/app_theme.dart';
 
 /// Primitivas visuales de Harmonix v2 (web/src/app.css + componentes chicos) para la
@@ -287,7 +288,8 @@ class _HxButtonState extends State<HxButton> with _Pressed {
 }
 
 /// `text-in` de StyledText: lo nuevo entra con fundido y 6 px de desplazamiento.
-/// Dale una `key` distinta para que vuelva a animar (como `{#key}`).
+/// Dale una `key` distinta para que vuelva a animar (como `{#key}`). Con animaciones
+/// reducidas aparece directo.
 class HxTextIn extends StatefulWidget {
   const HxTextIn({super.key, required this.child, this.offset = 6});
   final Widget child;
@@ -308,7 +310,12 @@ class _HxTextInState extends State<HxTextIn> with SingleTickerProviderStateMixin
   }
 
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
+  Widget build(BuildContext context) {
+    if (carReducedMotion(context)) return widget.child;
+    return _animated();
+  }
+
+  Widget _animated() => AnimatedBuilder(
     animation: _a,
     builder: (_, child) => Opacity(
       opacity: _a.value,

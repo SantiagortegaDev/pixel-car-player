@@ -14,3 +14,14 @@ class CarCustomScope extends InheritedWidget {
   @override
   bool updateShouldNotify(CarCustomScope oldWidget) => !identical(value, oldWidget.value);
 }
+
+/// ¿Animaciones reducidas? Configuración → Diseño → Animaciones (como `lib/motion.js` de
+/// Harmonix v2: el ajuste manda; "Sistema" sigue a "Quitar animaciones" / accesibilidad).
+bool carReducedMotion(BuildContext context, [CarCustomization? cfg]) =>
+    switch ((cfg ?? CarCustomScope.of(context)).design.motion) {
+      CarMotion.full => false,
+      CarMotion.reduced => true,
+      CarMotion.system =>
+        (MediaQuery.maybeDisableAnimationsOf(context) ?? false) ||
+            (MediaQuery.maybeAccessibleNavigationOf(context) ?? false),
+    };

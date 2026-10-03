@@ -63,11 +63,7 @@ class _TcpConnection implements LinkConnection {
   Future<void> close() async => _finish();
 }
 
-Future<LinkConnection?> connectTcp(
-  String host,
-  int port, {
-  Duration timeout = const Duration(seconds: 3),
-}) async {
+Future<LinkConnection?> connectTcp(String host, int port, {Duration timeout = const Duration(seconds: 3)}) async {
   try {
     final s = await Socket.connect(host, port, timeout: timeout);
     return _TcpConnection(s);

@@ -474,9 +474,13 @@ void main() {
       ),
     );
     await tester.pump(const Duration(seconds: 1));
+    await tester.ensureVisible(find.text('Fijo'));
+    await tester.pump(const Duration(milliseconds: 300));
     await tester.tap(find.text('Fijo'));
     await tester.pump(const Duration(milliseconds: 500));
     expect(c.cfg.design.colorSource, CarColorSource.fixed);
+    await tester.ensureVisible(find.bySemanticsLabel('Color #B3261E'));
+    await tester.pump(const Duration(milliseconds: 300));
     await tester.tap(find.bySemanticsLabel('Color #B3261E'));
     await tester.pump(const Duration(milliseconds: 500));
     expect(c.cfg.design.fixedColor, 0xFFB3261E);

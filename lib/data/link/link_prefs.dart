@@ -2,13 +2,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// Preferencias de conexión y pantalla de la tableta.
 class CarPrefs {
-  CarPrefs({
-    this.manualIp,
-    this.btAddress,
-    this.btName,
-    this.keepScreenOn = true,
-    this.demo = false,
-  });
+  CarPrefs({this.manualIp, this.btAddress, this.btName, this.keepScreenOn = true, this.demo = false});
 
   /// IP manual del celular (vacía = no se usa).
   String? manualIp;
@@ -31,6 +25,10 @@ class CarPrefs {
   static const kAutostart = 'car_autostart';
   static const kAutostartDelay = 'car_autostart_delay';
 
+  /// App acompañante que el BootReceiver abre detrás (vacío = ninguna) y su espera (ms).
+  static const kCompanionPackage = 'car_companion_package';
+  static const kCompanionDelay = 'car_companion_delay';
+
   static Future<CarPrefs> load() async {
     try {
       final p = await SharedPreferences.getInstance();
@@ -49,8 +47,7 @@ class CarPrefs {
   Future<void> save() async {
     try {
       final p = await SharedPreferences.getInstance();
-      Future<void> setOrRemove(String k, String? v) async =>
-          (v == null || v.isEmpty) ? p.remove(k) : p.setString(k, v);
+      Future<void> setOrRemove(String k, String? v) async => (v == null || v.isEmpty) ? p.remove(k) : p.setString(k, v);
       await setOrRemove(_kIp, manualIp?.trim());
       await setOrRemove(_kBt, btAddress);
       await setOrRemove(_kBtName, btName);

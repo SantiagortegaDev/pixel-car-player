@@ -6,6 +6,8 @@ import 'package:material_symbols_icons/symbols.dart';
 import 'package:pixel_car_player/car/car_controller.dart';
 import 'package:pixel_car_player/car/custom/car_custom_scope.dart';
 import 'package:pixel_car_player/car/custom/car_customization.dart';
+import 'package:pixel_car_player/car/settings/hotspot_help.dart';
+import 'package:pixel_car_player/car/system/car_hotspot.dart';
 import 'package:pixel_car_player/car/widgets/background_shapes.dart';
 import 'package:pixel_car_player/car/widgets/controls.dart';
 import 'package:pixel_car_player/car/widgets/disc.dart';
@@ -95,19 +97,54 @@ class CarPlayerScreen extends StatefulWidget {
 class _CarPlayerScreenState extends State<CarPlayerScreen> {
   late bool _lyricsFullscreen = widget.initialLyricsFullscreen;
   String _tab = 'lyrics';
+  CarHotspot? _hotspot;
+  BuildContext? _themed;
 
   void _toggleLyrics() => setState(() => _lyricsFullscreen = !_lyricsFullscreen);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (widget.preview) return;
+    final h = context.read<CarController>().hotspot;
+    if (!identical(h, _hotspot)) {
+      _hotspot?.prompt.removeListener(_onHotspotPrompt);
+      _hotspot = h..prompt.addListener(_onHotspotPrompt);
+    }
+  }
+
+  @override
+  void dispose() {
+    _hotspot?.prompt.removeListener(_onHotspotPrompt);
+    super.dispose();
+  }
+
+  /// No se pudo encender el hotspot solo: diálogo con el atajo a los ajustes.
+  void _onHotspotPrompt() {
+    final h = _hotspot;
+    final p = h?.prompt.value;
+    final ctx = _themed;
+    if (h == null || p == null || ctx == null || !mounted) return;
+    h.prompt.value = null;
+    showHotspotHelpDialog(ctx, canWriteSettings: p.canWriteSettings, error: p.error);
+  }
 
   @override
   Widget build(BuildContext context) {
     final ctrl = context.watch<CarController>();
     final cfg = ctrl.cfg;
+    final reduced = carReducedMotion(context, cfg);
     return CarCustomScope(
       value: cfg,
       child: HxAnimatedTheme(
         scheme: ctrl.schemeFor(MediaQuery.platformBrightnessOf(context)),
+        duration: reduced ? Duration.zero : HxMotion.dTheme,
         child: Builder(
           builder: (themed) {
+            _themed = themed;
+            if (_hotspot?.prompt.value != null) {
+              WidgetsBinding.instance.addPostFrameCallback((_) => _onHotspotPrompt());
+            }
             final cs = themed.cs;
             final np = ctrl.nowPlaying;
             final hasTrack = np.track != null;
@@ -126,7 +163,8 @@ class _CarPlayerScreenState extends State<CarPlayerScreen> {
                     children: [
                       if (cfg.show(CarElement.backgroundShapes) && cfg.design.shapesCount > 0)
                         BackgroundShapes(
-                          playing: hasTrack && np.playing,
+                          playing: ctrl.visualActive,
+                          reduced: reduced,
                           count: cfg.design.shapesCount,
                           opacity: cfg.design.shapesOpacity,
                           animate: cfg.design.shapesAnimate,
@@ -171,6 +209,7 @@ class _CarPlayerScreenState extends State<CarPlayerScreen> {
                                     np: np,
                                     size: size,
                                     headerH: showHeader ? 60 : 0,
+                                    reduced: reduced,
                                   ),
                                   _ => _Stage(
                                     ctrl: ctrl,
@@ -180,6 +219,7 @@ class _CarPlayerScreenState extends State<CarPlayerScreen> {
                                     tab: _tab,
                                     onTab: (t) => setState(() => _tab = t),
                                     onFullscreen: _toggleLyrics,
+                                    reduced: reduced,
                                   ),
                                 },
                               ),
@@ -349,6 +389,14 @@ class StageLayout {
   /// Alto del panel lateral (letra / cola).
   final double sideH;
 
+  /// Ancho máximo de la columna de detalles cuando hay espacio de sobra (sin panel
+  /// lateral o sin portada): el de Harmonix (`minmax(300px, 440px)`).
+  static const detailsMax = 440.0;
+
+  /// Ancho máximo de los detalles para controles de alto [controlHeight]: los botones
+  /// ocupan todo el ancho de la columna, así que crece si los botones son muy altos.
+  static double detailsMaxFor(double controlHeight) => math.max(detailsMax, controlHeight * 5 + 16);
+
   factory StageLayout.of(
     Size size, {
     bool cover = true,
@@ -356,6 +404,7 @@ class StageLayout {
     bool side = true,
     double coverScale = 1,
     double headerH = 60,
+    double maxDetails = detailsMax,
   }) {
     final w = size.width, h = size.height;
     final stageW = math.min(1600.0, w);
@@ -396,11 +445,14 @@ class StageLayout {
       disc = (base * coverScale).clamp(140.0, math.max(140.0, math.min(stageH, avail - reserve)));
     }
     final rest = math.max(0.0, avail - disc - gaps);
+    // Los detalles no se estiran más que [maxDetails]: título, barra, botones y chips
+    // forman un bloque del mismo ancho que se centra junto a la portada.
+    final detMax = math.max(minDetails, maxDetails);
     if (details && side) {
-      det = (rest * 0.48).clamp(minDetails, 520.0);
+      det = (rest * 0.48).clamp(minDetails, detMax);
       sd = math.min(rest - det, 760.0);
     } else if (details) {
-      det = math.min(rest, cover ? 560.0 : 640.0);
+      det = math.min(rest, detMax);
     } else if (side) {
       sd = math.min(rest, cover ? 720.0 : 900.0);
     }
@@ -442,6 +494,7 @@ class _Stage extends StatelessWidget {
     required this.tab,
     required this.onTab,
     required this.onFullscreen,
+    required this.reduced,
   });
 
   final CarController ctrl;
@@ -451,6 +504,7 @@ class _Stage extends StatelessWidget {
   final String tab;
   final ValueChanged<String> onTab;
   final VoidCallback onFullscreen;
+  final bool reduced;
 
   @override
   Widget build(BuildContext context) {
@@ -466,11 +520,13 @@ class _Stage extends StatelessWidget {
       side: showSide,
       coverScale: cfg.cover.scale,
       headerH: headerH,
+      maxDetails: StageLayout.detailsMaxFor(cfg.design.controlHeight),
     );
     final titleSize = (size.width * 0.024).clamp(28.0, 36.0) * cfg.design.titleScale;
     final columns = <Widget>[
       if (showCover)
         SizedBox(
+          key: const ValueKey('car-cover-column'),
           width: l.disc,
           child: Center(
             child: _CoverGestures(ctrl: ctrl, child: _disc(cfg, l.disc)),
@@ -478,6 +534,7 @@ class _Stage extends StatelessWidget {
         ),
       if (showDetails)
         SizedBox(
+          key: const ValueKey('car-details'),
           width: l.details,
           // Red de seguridad: con textos/controles muy grandes la columna se achica en vez
           // de desbordar (en el carro no hay scroll).
@@ -488,7 +545,7 @@ class _Stage extends StatelessWidget {
               alignment: Alignment.centerLeft,
               child: SizedBox(
                 width: l.details,
-                child: _Details(ctrl: ctrl, np: np, titleSize: titleSize, onFullscreen: onFullscreen),
+                child: _Details(ctrl: ctrl, np: np, titleSize: titleSize, onFullscreen: onFullscreen, reduced: reduced),
               ),
             ),
           ),
@@ -523,13 +580,23 @@ class _Stage extends StatelessWidget {
     );
   }
 
-  Widget _disc(CarCustomization cfg, double size) => Disc(
+  Widget _disc(CarCustomization cfg, double size) => carDisc(ctrl, np, size, reduced);
+}
+
+/// El disco con el estado de animación del controlador (suena / audio detectado / "Animar
+/// siempre") y el audio real cuando corresponde.
+Widget carDisc(CarController ctrl, NowPlaying np, double size, bool reduced) {
+  final cfg = ctrl.cfg;
+  return Disc(
     artwork: np.artwork,
     size: size,
-    playing: np.playing,
+    playing: ctrl.visualActive,
     cover: cfg.cover,
     viz: cfg.visualizer,
     showBars: cfg.show(CarElement.visualizer),
+    reduced: reduced,
+    audio: ctrl.audio,
+    realAudio: ctrl.useRealAudio,
   );
 }
 
@@ -601,6 +668,7 @@ class _Titles extends StatelessWidget {
     return HxTextIn(
       key: ValueKey(track.id),
       child: Column(
+        key: const ValueKey('car-titles'),
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -612,9 +680,10 @@ class _Titles extends StatelessWidget {
 }
 
 class _Progress extends StatelessWidget {
-  const _Progress({required this.ctrl, required this.np});
+  const _Progress({required this.ctrl, required this.np, required this.reduced});
   final CarController ctrl;
   final NowPlaying np;
+  final bool reduced;
 
   @override
   Widget build(BuildContext context) {
@@ -623,6 +692,7 @@ class _Progress extends StatelessWidget {
     final dur = np.track?.duration ?? Duration.zero;
     final times = cfg.show(CarElement.times);
     return Row(
+      key: const ValueKey('car-progress'),
       children: [
         if (times) ...[
           SizedBox(
@@ -641,6 +711,7 @@ class _Progress extends StatelessWidget {
             playing: np.playing,
             onSeek: ctrl.seek,
             waveAmplitude: cfg.design.wavy ? cfg.design.waveAmplitude : 0,
+            reduced: reduced,
           ),
         ),
         if (times) ...[
@@ -683,8 +754,10 @@ class _Buttons extends StatelessWidget {
     }
 
     final h = cfg.design.controlHeight;
-    return ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: HxControls.maxWidthFor(h)),
+    // Ocupan todo el ancho de la columna (como la barra de progreso): el bloque de
+    // detalles queda alineado a ambos lados. La columna ya limita el ancho.
+    return KeyedSubtree(
+      key: const ValueKey('car-controls'),
       child: HxControls(
         playing: np.playing,
         onToggle: ctrl.toggle,
@@ -704,11 +777,18 @@ class _Buttons extends StatelessWidget {
 }
 
 class _Details extends StatelessWidget {
-  const _Details({required this.ctrl, required this.np, required this.titleSize, required this.onFullscreen});
+  const _Details({
+    required this.ctrl,
+    required this.np,
+    required this.titleSize,
+    required this.onFullscreen,
+    required this.reduced,
+  });
   final CarController ctrl;
   final NowPlaying np;
   final double titleSize;
   final VoidCallback onFullscreen;
+  final bool reduced;
 
   @override
   Widget build(BuildContext context) {
@@ -731,9 +811,10 @@ class _Details extends StatelessWidget {
     // Bloques con su separación de Harmonix (32 · 20 · 16) solo entre los visibles.
     final blocks = <(double, Widget)>[
       if (hasTitles) (0, _Titles(track: np.track!, titleSize: titleSize)),
-      if (cfg.show(CarElement.progress)) (32, _Progress(ctrl: ctrl, np: np)),
+      if (cfg.show(CarElement.progress)) (32, _Progress(ctrl: ctrl, np: np, reduced: reduced)),
       if (_Buttons.anyVisible(cfg)) (20, _Buttons(ctrl: ctrl, np: np)),
-      if (cfg.show(CarElement.chips) && chips.isNotEmpty) (16, Wrap(spacing: 8, runSpacing: 8, children: chips)),
+      if (cfg.show(CarElement.chips) && chips.isNotEmpty)
+        (16, Wrap(key: const ValueKey('car-chips'), spacing: 8, runSpacing: 8, children: chips)),
     ];
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -820,11 +901,18 @@ class _Side extends StatelessWidget {
 // Letra en pantalla completa
 
 class _FullscreenLyrics extends StatelessWidget {
-  const _FullscreenLyrics({required this.ctrl, required this.np, required this.size, required this.headerH});
+  const _FullscreenLyrics({
+    required this.ctrl,
+    required this.np,
+    required this.size,
+    required this.headerH,
+    required this.reduced,
+  });
   final CarController ctrl;
   final NowPlaying np;
   final Size size;
   final double headerH;
+  final bool reduced;
 
   @override
   Widget build(BuildContext context) {
@@ -840,21 +928,11 @@ class _FullscreenLyrics extends StatelessWidget {
         (
           0,
           Center(
-            child: _CoverGestures(
-              ctrl: ctrl,
-              child: Disc(
-                artwork: np.artwork,
-                size: disc,
-                playing: np.playing,
-                cover: cfg.cover,
-                viz: cfg.visualizer,
-                showBars: cfg.show(CarElement.visualizer),
-              ),
-            ),
+            child: _CoverGestures(ctrl: ctrl, child: carDisc(ctrl, np, disc, reduced)),
           ),
         ),
       if (hasTitles) (16, _Titles(track: np.track!, titleSize: 26 * cfg.design.titleScale, compact: true)),
-      if (cfg.show(CarElement.progress)) (16, _Progress(ctrl: ctrl, np: np)),
+      if (cfg.show(CarElement.progress)) (16, _Progress(ctrl: ctrl, np: np, reduced: reduced)),
       if (_Buttons.anyVisible(cfg)) (12, _Buttons(ctrl: ctrl, np: np)),
     ];
     final lyrics = HxLyrics(

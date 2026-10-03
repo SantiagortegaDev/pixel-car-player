@@ -32,13 +32,10 @@ class LinkProtocol {
   }
 
   // ---- Tableta → celular ----
-  static Map<String, dynamic> hello(String device) => {
-    't': 'hello',
-    'v': version,
-    'device': device,
-  };
+  static Map<String, dynamic> hello(String device) => {'t': 'hello', 'v': version, 'device': device};
   static Map<String, dynamic> pong() => {'t': 'pong'};
   static Map<String, dynamic> resync() => {'t': 'resync'};
+
   /// Celular → tableta: próximos temas de la cola (hasta [maxQueue]).
   static Map<String, dynamic> queue(List<QueueItem> items) => {
     't': 'queue',
@@ -96,8 +93,7 @@ class LineBuffer {
 /// partidos entre paquetes TCP).
 class ByteLineDecoder {
   ByteLineDecoder() {
-    _sink = const Utf8Decoder(allowMalformed: true)
-        .startChunkedConversion(_StringCollector(_collected));
+    _sink = const Utf8Decoder(allowMalformed: true).startChunkedConversion(_StringCollector(_collected));
   }
 
   final List<String> _collected = [];
@@ -144,11 +140,7 @@ sealed class LinkMessage {
         } on FormatException {
           bytes = null;
         }
-        return ArtMessage(
-          id: (j['id'] as String?) ?? '',
-          mime: (j['mime'] as String?) ?? 'image/jpeg',
-          bytes: bytes,
-        );
+        return ArtMessage(id: (j['id'] as String?) ?? '', mime: (j['mime'] as String?) ?? 'image/jpeg', bytes: bytes);
       case 'state':
         return StateMessage(
           playing: j['playing'] == true,
@@ -218,12 +210,7 @@ class StateMessage extends LinkMessage {
 }
 
 class LyricsMessage extends LinkMessage {
-  const LyricsMessage({
-    required this.id,
-    required this.status,
-    this.synced = false,
-    this.lines = const [],
-  });
+  const LyricsMessage({required this.id, required this.status, this.synced = false, this.lines = const []});
   final String id;
   final LyricsStatus status;
   final bool synced;
@@ -236,10 +223,8 @@ class QueueItem {
   final String title;
   final String artist;
 
-  factory QueueItem.fromJson(Map<String, dynamic> j) => QueueItem(
-    title: (j['title'] as String?) ?? '',
-    artist: (j['artist'] as String?) ?? '',
-  );
+  factory QueueItem.fromJson(Map<String, dynamic> j) =>
+      QueueItem(title: (j['title'] as String?) ?? '', artist: (j['artist'] as String?) ?? '');
 
   Map<String, dynamic> toJson() => {'title': title, 'artist': artist};
 
