@@ -62,6 +62,12 @@ object LinkProtocol {
             .toString()
     }
 
+    fun queue(items: List<QueueEntry>): String {
+        val arr = JSONArray()
+        for (i in items) arr.put(JSONObject().put("title", i.title).put("artist", i.artist))
+        return JSONObject().put("t", "queue").put("items", arr).toString()
+    }
+
     fun ping(): String = """{"t":"ping"}"""
 
     fun beacon(device: String): String = JSONObject()

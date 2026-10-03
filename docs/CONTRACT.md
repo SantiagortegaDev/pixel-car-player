@@ -17,6 +17,7 @@ Fuente de verdad para Dart ⇄ Kotlin y celular ⇄ tableta. Cambios aquí prime
 | `art` | `id` (id del track), `mime` (`image/jpeg`), `b64` (JPEG ≤ 640 px, calidad 85) | tras `track` si hay carátula |
 | `state` | `playing` (bool), `positionMs`, `speed` (double) | cambio de estado, cada 5 s mientras suena, y al conectar |
 | `lyrics` | `id`, `status` (`ok` \| `not_found` \| `loading`), `synced` (bool), `lines`: `[{ "ms": int, "text": str }]` | cuando se resuelven (LRCLIB) |
+| `queue` | `items`: `[{ "title": str, "artist": str }]` — próximas canciones de la cola del reproductor (después del ítem activo si se conoce, si no toda la cola; máx 20; `[]` si no hay cola) | al conectar / `resync` (tras `lyrics`), al cambiar la cola y al cambiar de canción |
 | `ping` | — | cada 10 s |
 
 La tableta interpola la posición con su propio reloj desde el instante en que recibe `state`
@@ -29,7 +30,7 @@ La tableta interpola la posición con su propio reloj desde el instante en que r
 | `hello` | `v`, `device` |
 | `cmd` | `action`: `play` \| `pause` \| `toggle` \| `next` \| `previous` \| `seek`; `positionMs` (solo `seek`) |
 | `pong` | — (respuesta a `ping`) |
-| `resync` | — (pide reenviar `track`, `art`, `state`, `lyrics`) |
+| `resync` | — (pide reenviar `track`, `art`, `state`, `lyrics`, `queue`) |
 
 ### Descubrimiento (Wi-Fi)
 

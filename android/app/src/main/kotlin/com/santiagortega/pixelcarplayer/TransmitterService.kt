@@ -126,6 +126,7 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
     private var artBitmap: Bitmap? = null
     private var artHash: Int? = null
     private var lyricsMsg: String? = null
+    private var queueMsg: String? = null
     private var lyricsStatus = "none"
     private var lyricsTransient = false
     private var lyricsPendingId: String? = null
@@ -344,10 +345,28 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
     // ------------------------------------------------------------------ media callbacks (worker)
 
     override fun onSessionChanged(packageName: String?) {
+        refreshQueue()
         emitStatus()
     }
 
+    override fun onQueueChanged() {
+        refreshQueue()
+    }
+
+    /** Recomputes the upcoming queue and broadcasts it when it differs from the last one sent. */
+    private fun refreshQueue() {
+        val msg = try {
+            LinkProtocol.queue(watcher.upcomingQueue())
+        } catch (e: Exception) {
+            LinkProtocol.queue(emptyList())
+        }
+        if (msg == queueMsg) return
+        queueMsg = msg
+        broadcast(msg)
+    }
+
     override fun onMetadataChanged(meta: TrackMeta?) {
+        refreshQueue()
         if (meta == null || meta.isEmpty) {
             currentId = null
             currentTrack = null
@@ -385,6 +404,7 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
 
     override fun onPlaybackChanged(snap: PlaybackSnap?) {
         val wasPlaying = lastState?.playing
+        refreshQueue() // activeQueueItemId lives in PlaybackState
         sendStateIfChanged(force = false)
         if (lastState?.playing != wasPlaying) emitStatus()
     }
@@ -538,6 +558,7 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
         artMsg?.let { c.send(it) }
         c.send(currentStateMsg().first)
         lyricsMsg?.let { c.send(it) }
+        c.send(queueMsg ?: LinkProtocol.queue(emptyList()))
     }
 
     /** Called from accept threads. */

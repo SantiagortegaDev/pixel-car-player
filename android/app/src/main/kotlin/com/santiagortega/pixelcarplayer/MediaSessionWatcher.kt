@@ -24,6 +24,9 @@ data class TrackMeta(
     val isEmpty get() = title.isBlank() && artist.isBlank()
 }
 
+/** One upcoming queue entry. */
+data class QueueEntry(val title: String, val artist: String)
+
 /** Playback snapshot; [positionMs] is the live (extrapolated) position at [capturedAt]. */
 data class PlaybackSnap(
     val playing: Boolean,
@@ -53,6 +56,8 @@ class MediaSessionWatcher(
         fun onPlaybackChanged(snap: PlaybackSnap?) {}
         /** Album art for the current track changed (null = no art). */
         fun onArtChanged(art: Bitmap?) {}
+        /** The followed session's queue changed. */
+        fun onQueueChanged() {}
         /** Notification access missing: sessions cannot be read (retried automatically). */
         fun onAccessDenied() {}
     }
@@ -205,6 +210,10 @@ class MediaSessionWatcher(
             }
         }
 
+        override fun onQueueChanged(queue: MutableList<MediaSession.QueueItem>?) {
+            if (isCurrent()) listener.onQueueChanged()
+        }
+
         override fun onSessionDestroyed() {
             callbacks.remove(c.sessionToken)?.let { (cc, cb) -> safeUnregister(cc, cb) }
             if (isCurrent()) {
@@ -306,6 +315,30 @@ class MediaSessionWatcher(
         return snapOf(st, track?.durationMs ?: 0)
     }
 
+    // ---------------------------------------------------------------- queue
+
+    /** Upcoming tracks (after the active queue item if known, else whole queue), max [MAX_QUEUE_ITEMS]. */
+    fun upcomingQueue(): List<QueueEntry> = try {
+        val c = controller
+        val queue = c?.queue
+        if (c == null || queue == null) {
+            emptyList()
+        } else {
+            val activeId = c.playbackState?.activeQueueItemId ?: MediaSession.QueueItem.UNKNOWN_ID.toLong()
+            val idx = if (activeId == MediaSession.QueueItem.UNKNOWN_ID.toLong()) -1
+            else queue.indexOfFirst { it?.queueId == activeId }
+            queue.drop(idx + 1).mapNotNull { item ->
+                val d = item?.description ?: return@mapNotNull null
+                val title = d.title?.toString().orEmpty()
+                val artist = d.subtitle?.toString().orEmpty()
+                if (title.isBlank() && artist.isBlank()) null else QueueEntry(title, artist)
+            }.take(MAX_QUEUE_ITEMS)
+        }
+    } catch (e: Exception) {
+        Log.w(TAG, "queue read failed", e)
+        emptyList()
+    }
+
     // ---------------------------------------------------------------- transport
 
     /** Executes a contract `cmd` action on the followed session. Returns false if no session. */
@@ -315,6 +348,8 @@ class MediaSessionWatcher(
     }
 
     companion object {
+        const val MAX_QUEUE_ITEMS = 20
+
         fun isPlaying(st: PlaybackState?): Boolean = when (st?.state) {
             PlaybackState.STATE_PLAYING,
             PlaybackState.STATE_BUFFERING,
