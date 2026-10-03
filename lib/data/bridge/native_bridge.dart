@@ -77,6 +77,13 @@ class NativeBridge {
   Future<bool> startLocalMediaWatch() async =>
       await _call<bool>('startLocalMediaWatch') ?? false;
   Future<void> stopLocalMediaWatch() => _call('stopLocalMediaWatch');
+  /// Inicio automático: el receptor de arranque lee la preferencia `car_autostart`.
+  /// Android 10+ exige el permiso "mostrar sobre otras apps" para abrir la app sola.
+  Future<bool> canDrawOverlays() async =>
+      await _call<bool>('canDrawOverlays') ?? true;
+  Future<void> openOverlaySettings() => _call('openOverlaySettings');
+  Future<void> openBatteryOptimizationSettings() =>
+      _call('openBatteryOptimizationSettings');
   Future<bool> localMediaCommand(String action, {int? positionMs}) async =>
       await _call<bool>('localMediaCommand',
           {'action': action, 'positionMs': ?positionMs}) ??
