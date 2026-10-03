@@ -26,12 +26,14 @@ import java.util.concurrent.Executors
 class MainActivity : FlutterActivity() {
 
     private companion object {
-        const val PERMISSION_REQUEST = 4732
+        const val PERMISSION_REQUEST_BASE = 4732
     }
 
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newCachedThreadPool { r -> Thread(r, "pcp-io").apply { isDaemon = true } }
-    private var pendingPermissionResult: MethodChannel.Result? = null
+    /** requestCode → continuation, run on the main thread once the dialog answers. */
+    private val permissionCallbacks = HashMap<Int, () -> Unit>()
+    private var nextPermissionRequest = PERMISSION_REQUEST_BASE
     private var multicastLock: WifiManager.MulticastLock? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -48,8 +50,10 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         releaseMulticastLock()
-        pendingPermissionResult?.success(permissionState())
-        pendingPermissionResult = null
+        AudioViz.stop()
+        val pending = permissionCallbacks.values.toList()
+        permissionCallbacks.clear()
+        pending.forEach { runCatching(it) }
         super.onDestroy()
     }
 
@@ -157,7 +161,94 @@ class MainActivity : FlutterActivity() {
                 val pos = call.argument<Number>("positionMs")?.toLong()
                 background(result) { LocalMediaWatch.command(ctx, action, pos) }
             }
+
+            // ---- car: hotspot
+            "getHotspotState" -> background(result) { Hotspot.state(ctx) }
+            "setHotspotEnabled" -> setHotspotEnabled(call.argument<Boolean>("enabled") ?: true, result)
+            "openHotspotSettings" -> {
+                Hotspot.openSettings(this)
+                result.success(null)
+            }
+            "openWriteSettings" -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    openSettingsSafely(
+                        Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:$packageName")),
+                        appDetailsFallback = true,
+                    )
+                }
+                result.success(null)
+            }
+            "getNeighborIps" -> background(result) { NetUtils.neighborIps() }
+
+            // ---- car: real-audio visualizer
+            "requestAudioPermission" -> withPermissions(listOf(Manifest.permission.RECORD_AUDIO)) {
+                result.success(isGranted(Manifest.permission.RECORD_AUDIO))
+            }
+            "startVisualizer" -> result.success(AudioViz.start(this))
+            "stopVisualizer" -> {
+                AudioViz.stop()
+                result.success(null)
+            }
+
+            // ---- car: companion app
+            "getLaunchableApps" -> background(result) { AppLauncher.launchableApps(ctx) }
+            "launchApp" -> {
+                val pkg = call.argument<String>("package")
+                val bg = call.argument<Boolean>("background") ?: true
+                val delay = (call.argument<Number>("delayMs")?.toLong() ?: 1500L).coerceIn(0L, 60_000L)
+                if (pkg.isNullOrBlank()) {
+                    result.success(false)
+                } else {
+                    val ok = AppLauncher.launch(this, pkg)
+                    if (ok && bg) {
+                        val task = taskId
+                        main.postDelayed({ AppLauncher.bringToFront(ctx, task) }, delay)
+                    }
+                    result.success(ok)
+                }
+            }
+            "bringToFront" -> {
+                AppLauncher.bringToFront(ctx, taskId)
+                result.success(null)
+            }
+
+            // ---- phone: auto-join the car hotspot
+            "setHotspotAutoConnect" -> {
+                val ssid = call.argument<String>("ssid") ?: ""
+                val password = call.argument<String>("password") ?: ""
+                val enabled = call.argument<Boolean>("enabled") ?: true
+                background(result) { WifiJoin.setAutoConnect(ctx, ssid, password, enabled) }
+            }
+            "getWifiStatus" -> background(result) { WifiJoin.status(ctx) }
+
             else -> result.notImplemented()
+        }
+    }
+
+    /**
+     * System paths (tethering / wifiAp) off the main thread; if enabling failed, falls back to a
+     * LocalOnlyHotspot after asking for the runtime permissions it needs.
+     */
+    private fun setHotspotEnabled(enabled: Boolean, result: MethodChannel.Result) {
+        val ctx = applicationContext
+        io.execute {
+            val first = try {
+                Hotspot.setEnabled(ctx, enabled)
+            } catch (e: Throwable) {
+                Log.e(TAG, "setHotspotEnabled failed", e)
+                mapOf("ok" to false, "method" to "none", "needsSettings" to true, "error" to e.message)
+            }
+            if (first["ok"] == true || !enabled || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                main.post { result.success(first) }
+                return@execute
+            }
+            main.post {
+                val perms = Hotspot.localOnlyPermissions()
+                withPermissions(perms) {
+                    val granted = perms.all(::isGranted)
+                    background(result) { Hotspot.startLocalOnly(ctx, granted) }
+                }
+            }
         }
     }
 
@@ -216,22 +307,29 @@ class MainActivity : FlutterActivity() {
         val wanted = buildList {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) add(Manifest.permission.POST_NOTIFICATIONS)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) add(Manifest.permission.BLUETOOTH_CONNECT)
-        }.filterNot(::isGranted)
-        if (wanted.isEmpty()) {
-            result.success(permissionState())
+        }
+        withPermissions(wanted) { result.success(permissionState()) }
+    }
+
+    /**
+     * Requests the missing [permissions] (main thread) and then runs [done] exactly once, whatever
+     * the user answered (callers re-check with [isGranted]). Also runs if the activity is destroyed.
+     */
+    private fun withPermissions(permissions: List<String>, done: () -> Unit) {
+        val missing = permissions.filterNot(::isGranted)
+        if (missing.isEmpty()) {
+            done()
             return
         }
-        // A previous request still pending: answer it with the current state.
-        pendingPermissionResult?.success(permissionState())
-        pendingPermissionResult = result
-        ActivityCompat.requestPermissions(this, wanted.toTypedArray(), PERMISSION_REQUEST)
+        val code = nextPermissionRequest++
+        if (nextPermissionRequest > PERMISSION_REQUEST_BASE + 1000) nextPermissionRequest = PERMISSION_REQUEST_BASE
+        permissionCallbacks[code] = done
+        ActivityCompat.requestPermissions(this, missing.toTypedArray(), code)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode != PERMISSION_REQUEST) return
-        pendingPermissionResult?.success(permissionState())
-        pendingPermissionResult = null
+        permissionCallbacks.remove(requestCode)?.let { runCatching(it).onFailure { e -> Log.w(TAG, "permission callback failed", e) } }
     }
 
     // ------------------------------------------------------------------ multicast

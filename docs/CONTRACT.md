@@ -68,6 +68,19 @@ La tableta interpola la posición con su propio reloj desde el instante en que r
 | `canDrawOverlays` | — | `bool` (`true` bajo API 23) | tableta |
 | `openOverlaySettings` | — | — (abre `ACTION_MANAGE_OVERLAY_PERMISSION`; fallback a info de la app) | tableta |
 | `openBatteryOptimizationSettings` | — | — (abre `ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS`; fallback a info de la app) | tableta |
+| `getHotspotState` | — | `{enabled: bool?, ssid: String?, password: String?, method, canWriteSettings: bool}` — `enabled` null = no se pudo leer; `method`: `localOnly` (reserva propia activa) \| `tethering` \| `wifiAp` (lo encendimos nosotros) \| `system` (encendido por otro) \| `none` (apagado) \| `unknown`. ssid/password null si Android no deja leerlos | tableta |
+| `setHotspotEnabled` | `{enabled: bool}` | `{ok, method: 'tethering'\|'wifiAp'\|'localOnly'\|'none', needsSettings: bool, ssid?, password?, error: String?}` — orden: tethering → `setWifiApEnabled` → LocalOnlyHotspot (pide ubicación / `NEARBY_WIFI_DEVICES`); confirma sondeando el estado ≤ 3 s. `ok:true, method:'none'` = ya estaba como se pidió. `error` (código): `systemPathsFailed`, `permissionDenied`, `locationOff`, `noChannel`, `incompatibleMode`, `tetheringDisallowed`, `timeout`, `generic`, `unsupported` | tableta |
+| `openHotspotSettings` | — | — (TetherSettings → `Settings$TetherSettingsActivity` → `Settings$WifiTetherSettingsActivity` → `android.settings.TETHER_SETTINGS` → Conexiones inalámbricas → Ajustes) | tableta |
+| `openWriteSettings` | — | — (`ACTION_MANAGE_WRITE_SETTINGS` de esta app; habilita la vía tethering en Android 7–10) | tableta |
+| `getNeighborIps` | — | `List<String>` IPv4 de `/proc/net/arp` (flags 0x2, MAC ≠ 0) + `ip neigh` (REACHABLE/STALE/DELAY/PROBE). Vacío si Android lo bloquea (10+ / 11+) | tableta |
+| `requestAudioPermission` | — | `bool` (RECORD_AUDIO concedido, tras el diálogo) | tableta |
+| `startVisualizer` | — | `bool` — `Visualizer(0)` (mezcla global); emite eventos `fft`. false sin permiso o sin soporte | tableta |
+| `stopVisualizer` | — | — (también se libera al destruir la Activity) | tableta |
+| `getLaunchableApps` | — | `[{package, label, icon: Uint8List? (PNG 96 px)}]` ordenado por `label`, sin esta app | tableta |
+| `launchApp` | `{package, background: bool = true, delayMs: int = 1500}` | `bool` (se abrió); con `background` vuelve a traer esta app al frente tras `delayMs` | tableta |
+| `bringToFront` | — | — (`REORDER_TO_FRONT` + `moveTaskToFront`) | tableta |
+| `setHotspotAutoConnect` | `{ssid, password, enabled}` (`password` vacío = red abierta; si no, 8–63 caracteres) | `{ok, method: 'suggestion'\|'legacy'\|'none', error: String?}` — API 29+ `WifiNetworkSuggestion` (reemplaza la del mismo SSID; `enabled:false` la quita); < 29 `WifiConfiguration` guardada. `error` es un texto en español apto para mostrar, con el código entre paréntesis (p. ej. `(appDisallowed)`) | celular |
+| `getWifiStatus` | — | `{connected: bool, ssid: String?}` (ssid null sin permiso/servicio de ubicación) | celular |
 
 **Inicio automático**: `BootReceiver` (exportado, `RECEIVE_BOOT_COMPLETED`) escucha `BOOT_COMPLETED`,
 `LOCKED_BOOT_COMPLETED`, `QUICKBOOT_POWERON`, `MY_PACKAGE_REPLACED` y broadcasts "ACC on" de head units
@@ -76,6 +89,17 @@ La tableta interpola la posición con su propio reloj desde el instante en que r
 `flutter.car_autostart == true` (Boolean); opcional `flutter.car_autostart_delay` (segundos, Long, default 3).
 Tras el delay lanza `MainActivity` (`FLAG_ACTIVITY_NEW_TASK`). En Android 10+ requiere `SYSTEM_ALERT_WINDOW`
 (se intenta igual sin el permiso; errores se registran con tag `PCP`).
+**App acompañante**: si `flutter.car_companion_package` (String) no está vacío, tras el delay se abre esa app
+primero y `MainActivity` `flutter.car_companion_delay` ms después (Long, default 1500, máx. 30000) para que
+la nuestra quede al frente. Solo ocurre si el inicio automático está activo (mismas condiciones de arriba).
+
+**Hotspot local**: mientras hay una reserva LocalOnlyHotspot activa corre `HotspotKeeperService`
+(foreground, `connectedDevice`, notificación "Hotspot del carro activo"), porque Android apaga el hotspot
+local cuando la app que lo pidió deja de estar en primer plano.
+
+Claves de `FlutterSharedPreferences` leídas en nativo (prefijo `flutter.`): `app_mode`, `car_autostart`,
+`car_autostart_delay`, `car_companion_package`, `car_companion_delay`. El resto (SSID/clave del hotspot,
+auto-conexión del celular…) solo lo guarda Dart.
 
 `EventChannel("pcp/events")` — un único stream de `Map` con campo `type`:
 
@@ -84,6 +108,7 @@ Tras el delay lanza `MainActivity` (`FLAG_ACTIVITY_NEW_TASK`). En Android 10+ re
 | `transmitterStatus` | `running` (bool), `port`, `ips: [String]`, `clients: [{device, transport: "wifi"\|"bt", address}]`, `session: {package, title, artist, playing}?`, `lyricsStatus` |
 | `rfcomm` | `event`: `connected` (`name`, `address`) \| `line` (`data`: String JSON) \| `disconnected` (`reason`) |
 | `localMedia` | `package`, `title`, `artist`, `album`, `durationMs`, `playing`, `positionMs`, `art` (`Uint8List?` PNG/JPEG) |
+| `fft` | `bands: List<double>` (64, graves → agudos, log-espaciadas 30 Hz–16 kHz, 0..1 con auto-ganancia lenta y suavizado de caída), `rms: double` (0..1, auto-ganancia). ≤ 30 fps; la mayoría de los equipos captura a 20 Hz como máximo |
 
 ## 3. Paquete / ids
 

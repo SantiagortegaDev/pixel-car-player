@@ -18,7 +18,7 @@ class NativeBridge {
 
   Stream<Map<String, dynamic>>? _eventStream;
 
-  /// Stream único de eventos nativos (`type`: transmitterStatus | rfcomm | localMedia).
+  /// Stream único de eventos nativos (`type`: transmitterStatus | rfcomm | localMedia | fft).
   Stream<Map<String, dynamic>> get events {
     if (!isSupported) return const Stream.empty();
     return _eventStream ??= _events
