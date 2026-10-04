@@ -67,6 +67,37 @@ no llegan. Por eso el celular también **marca al carro** con sockets enlazados 
   permite, activado por defecto): el celular registra la red para unirse solo
   (`setHotspotAutoConnect`) y la guarda.
 
+### v3 — emparejamiento seguro, más controles y cola con carátulas
+
+**Autenticación (mutua, HMAC-SHA256).**
+- `hello` agrega `nonce` (16 bytes hex, nuevo por conexión) y `id` (ya existía).
+- Si un lado tiene `token` guardado para el `id` del otro, responde al `hello` con
+  `{"t":"auth","mac":hex}` donde `mac = HMAC_SHA256(key = token (bytes de la cadena hex),
+  msg = "<nonce del otro>:<id propio>")`, hex en minúsculas. El receptor verifica con su copia.
+- La sesión queda **autenticada** cuando cada lado validó el `auth` del otro (o el lado tiene
+  "Requerir emparejamiento" apagado: entonces confía sin validar, pero sigue respondiendo `auth`).
+- Hasta autenticar: el **celular** solo envía `hello`/`auth`/`pair_*`/`ping` e ignora `cmd`;
+  la **tableta** solo envía `hello`/`auth`/`pair_*`/`pong` (nada de `resync` ni `hotspot`).
+  Al autenticar: el celular manda el snapshot; la tableta manda `resync` y `hotspot`.
+- **Emparejar** (celular sin token para ese carro, o `auth` inválido):
+  1. celular → `{"t":"pair_request","name":"<modelo>"}`; la tableta muestra un código de 6
+     dígitos (válido 2 min) en pantalla grande y responde `{"t":"pair_shown"}`.
+  2. El usuario escribe el código en el celular → `{"t":"pair","code":"123456","token":"<64 hex>"}`
+     (token aleatorio de 32 bytes generado por el celular).
+  3. La tableta valida → guarda `token` para ese `id` → `{"t":"pair_ok"}` (sesión autenticada).
+     Si falla: `{"t":"pair_fail","reason":"code"|"expired"|"busy"}` (máx. 5 intentos por código).
+- Prefs: celular `flutter.phone_require_pairing` (bool, def. true); tableta `car_require_pairing`
+  (def. true). Tokens: celular en prefs nativas (`pcp_native`), tableta en prefs Dart
+  (`car_trusted_phones`: JSON `{id: {token, name, pairedAt}}`).
+
+**Controles y estado extra.**
+- `cmd.action` agrega: `shuffle` (alternar), `repeat` (ciclo off→all→one), `like` (alternar
+  "me gusta" vía acción personalizada de la app si existe), `skipToQueue` (+ `queueId`: int).
+- `state` agrega: `shuffle` (bool|null), `repeat` ("off"|"all"|"one"|null), `liked` (bool|null),
+  `canLike` (bool), `canShuffle` (bool), `canRepeat` (bool).
+- `queue.items[]` agrega `id` (queueId, int) y `art` (JPEG 96 px base64, opcional; se envía como
+  máximo para los primeros 12 elementos).
+
 ## 2. Canal nativo (Flutter ⇄ Kotlin)
 
 `MethodChannel("pcp/native")` — en web/desktop no existe: el código Dart debe protegerse con

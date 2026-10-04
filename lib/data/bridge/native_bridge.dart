@@ -150,4 +150,94 @@ class NativeBridge {
   ///   swlan0…, `isHotspot: true`).
   Future<List<Map<String, dynamic>>> getWifiNetworks() async =>
       (await _call<List>('getWifiNetworks') ?? const []).map(_map).toList();
+  // =====================================================================
+  // v3 (ver docs/CONTRACT.md §1 v3 y §2 v3)
+  // =====================================================================
+
+  List<Map<String, dynamic>> _list(Object? v) =>
+      (v is List ? v : const []).map((e) => _map(e)).toList();
+
+  // ---- Ambos: versión, actualizaciones y copias de seguridad ----
+  /// `{versionName, versionCode, abi, package}`.
+  Future<Map<String, dynamic>> getAppVersion() async =>
+      _map(await _call<Map>('getAppVersion'));
+
+  /// Consulta GitHub Releases. `{available, versionName, versionCode, notes, htmlUrl,
+  /// apkUrl, apkSize, error?}` (apkUrl elegido según la ABI del equipo).
+  Future<Map<String, dynamic>> checkForUpdate() async =>
+      _map(await _call<Map>('checkForUpdate'));
+
+  /// Descarga e inicia el instalador. Emite `{type:'updateProgress', received, total}` y
+  /// `{type:'updateState', state:'downloading'|'installing'|'error', error?}`.
+  Future<bool> downloadAndInstallUpdate(String apkUrl) async =>
+      await _call<bool>('downloadAndInstallUpdate', {'apkUrl': apkUrl}) ?? false;
+  Future<bool> canInstallPackages() async =>
+      await _call<bool>('canInstallPackages') ?? false;
+  Future<void> openInstallPermissionSettings() => _call('openInstallPermissionSettings');
+
+  /// Guarda una copia (JSON) en Documentos/PixelCarPlayer/. Devuelve la ruta/URI o null.
+  Future<String?> saveBackupFile(String json, {String name = 'pixel-car-player-config.json'}) =>
+      _call<String>('saveBackupFile', {'json': json, 'name': name});
+
+  /// Abre el selector de archivos y devuelve el contenido del JSON elegido (o null).
+  Future<String?> pickBackupFile() => _call<String>('pickBackupFile');
+
+  // ---- Celular: emparejamiento ----
+  /// `[{id, name, pairedAt}]`.
+  Future<List<Map<String, dynamic>>> getPairedCars() async =>
+      _list(await _call<List>('getPairedCars'));
+  Future<void> forgetCar(String id) => _call('forgetCar', {'id': id});
+
+  /// Envía el código mostrado en la tableta. Resultado por evento
+  /// `{type:'pairResult', carId, ok, reason?}`. Pedido de código: `{type:'pairNeeded', carId, carName}`.
+  Future<bool> submitPairCode(String carId, String code) async =>
+      await _call<bool>('submitPairCode', {'carId': carId, 'code': code}) ?? false;
+
+  // ---- Celular: arranque automático por Bluetooth / Wi-Fi del carro ----
+  /// Guarda reglas: `{enabled, btAddresses:[String], wifiSsids:[String], stopAfterMinutes}`.
+  /// Nativo las usa (CompanionDeviceManager / ACL / red Wi-Fi) para encender y apagar el
+  /// transmisor solo.
+  Future<bool> setAutoStartRules(Map<String, dynamic> rules) async =>
+      await _call<bool>('setAutoStartRules', rules) ?? false;
+  Future<Map<String, dynamic>> getAutoStartRules() async =>
+      _map(await _call<Map>('getAutoStartRules'));
+
+  /// Asocia el dispositivo Bluetooth del carro con CompanionDeviceManager (Android 8+),
+  /// lo que permite arrancar el transmisor en segundo plano. Muestra el diálogo del sistema.
+  /// `{ok, address?, name?, error?}`.
+  Future<Map<String, dynamic>> associateCarDevice({String? address}) async =>
+      _map(await _call<Map>('associateCarDevice', {'address': address}));
+
+  /// `{btCarConnected: bool, btDevice: String?, wifiSsid: String?, matches: bool,
+  ///   transmitterRunning: bool, reason: String}`.
+  Future<Map<String, dynamic>> getAutoStartStatus() async =>
+      _map(await _call<Map>('getAutoStartStatus'));
+
+  // ---- Tableta: estado de Bluetooth / Wi-Fi del radio ----
+  /// `{btEnabled, btDevices:[{name,address,profiles:[String]}], wifiEnabled, wifiConnected,
+  ///   wifiSsid?, hotspotOn: bool?, hotspotClients: int?}`. También como evento
+  ///   `{type:'connectivity', ...}` cuando cambia (tras `startConnectivityWatch`).
+  Future<Map<String, dynamic>> getConnectivityStatus() async =>
+      _map(await _call<Map>('getConnectivityStatus'));
+  Future<void> startConnectivityWatch() => _call('startConnectivityWatch');
+  Future<void> stopConnectivityWatch() => _call('stopConnectivityWatch');
+
+  // ---- Tableta: mantener Pixel siempre encima ----
+  Future<bool> hasUsageAccess() async => await _call<bool>('hasUsageAccess') ?? false;
+  Future<void> openUsageAccessSettings() => _call('openUsageAccessSettings');
+
+  /// Servicio que vigila la app en primer plano y vuelve a traer Pixel Car Player cuando
+  /// [packages] (o cualquier app si está vacío y `anyApp`) pasa al frente.
+  /// `{enabled, packages:[String], anyApp: bool, delayMs: int}`.
+  Future<bool> setKeepInFront(Map<String, dynamic> cfg) async =>
+      await _call<bool>('setKeepInFront', cfg) ?? false;
+
+  /// Burbuja flotante sobre otras apps (portada + título; tocar = abrir Pixel).
+  /// `{enabled, size: int dp, opacity: double}`.
+  Future<bool> setFloatingBubble(Map<String, dynamic> cfg) async =>
+      await _call<bool>('setFloatingBubble', cfg) ?? false;
+  Future<void> updateFloatingBubble(
+          {required String title, required String artist, Uint8List? art, bool playing = false}) =>
+      _call('updateFloatingBubble',
+          {'title': title, 'artist': artist, 'art': art, 'playing': playing});
 }
