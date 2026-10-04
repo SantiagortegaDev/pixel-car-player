@@ -19,6 +19,8 @@ class BootReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent?) {
         val action = intent?.action ?: return
+        // v3: reanudar "mantener al frente" / burbuja si quedaron activos (independiente del autoinicio).
+        CarFeatures.restoreOnBoot(context)
         try {
             val prefs = context.applicationContext
                 .getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)

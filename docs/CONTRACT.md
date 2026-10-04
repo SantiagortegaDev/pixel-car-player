@@ -178,6 +178,98 @@ Identificador de instalación (`id` de `hello`/`beacon`): `SharedPreferences("pc
 | `localMedia` | `package`, `title`, `artist`, `album`, `durationMs`, `playing`, `positionMs`, `art` (`Uint8List?` PNG/JPEG) |
 | `fft` | `bands: List<double>` (64, graves → agudos, log-espaciadas 30 Hz–16 kHz, 0..1 con auto-ganancia lenta y suavizado de caída), `rms: double` (0..1, auto-ganancia). ≤ 30 fps; la mayoría de los equipos captura a 20 Hz como máximo |
 
+### §2 v3 — tableta (mantener al frente, burbuja, conectividad) y ambos (actualizaciones, copias)
+
+Implementado en `CarFeatures.kt` (MainActivity delega con una línea al inicio de su `handle`).
+
+| Método | Args | Retorno | Lado |
+|--------|------|---------|------|
+| `getAppVersion` | — | `{versionName, versionCode (long, el del APK instalado: con split-per-abi incluye 1000×ABI), abi (SUPPORTED_ABIS[0]), package, installedAt (ms, lastUpdateTime)}` | ambos |
+| `checkForUpdate` | — | `{available, versionName, versionCode, notes, htmlUrl, apkUrl, apkSize, apkName, abi, tag, prerelease, publishedAt, error?}` — ver "Actualizaciones" abajo. `error`: `network` \| `http_<código>` \| `rateLimited` \| `parse` \| `noReleases` \| `noAsset` (con error, solo `available:false`) | ambos |
+| `downloadAndInstallUpdate` | `{apkUrl}` (https) | `bool` — true si quedó en marcha el instalador del sistema (el usuario confirma). Responde al terminar la descarga | ambos |
+| `canInstallPackages` | — | `bool` (`canRequestPackageInstalls()`; true bajo API 26) | ambos |
+| `openInstallPermissionSettings` | — | — (`ACTION_MANAGE_UNKNOWN_APP_SOURCES` de esta app → Seguridad → info de la app) | ambos |
+| `saveBackupFile` | `{json, name = 'pixel-car-player-config.json'}` | `String?` ruta absoluta legible. API 29+: MediaStore `Documents/PixelCarPlayer/` (sobrescribe si el archivo es nuestro; uno ajeno o de una instalación anterior → MediaStore agrega ` (1)` y se devuelve el nombre real). API < 29: `Documents/PixelCarPlayer/` público (pide `WRITE_EXTERNAL_STORAGE`). Si falla: `Android/data/<pkg>/files/Documents/PixelCarPlayer/` (se borra al desinstalar). null si todo falla | ambos |
+| `pickBackupFile` | — | `String?` contenido (UTF-8, ≤ 5 MB) del archivo elegido con `ACTION_OPEN_DOCUMENT` (`application/json`, `text/*`, `application/octet-stream`; respaldo `GET_CONTENT`), null si se canceló | ambos |
+| `getConnectivityStatus` | — | `{btEnabled, btPermission, btDevices: [{name, address, profiles: [String]}], wifiEnabled, wifiConnected, wifiSsid: String?, hotspotOn: bool?, hotspotClients: int?}` — `profiles` ⊂ `a2dp`, `a2dpSink` (11: el radio recibe audio del celular), `headset`, `headsetClient` (16: HFP del radio), `avrcpController` (12), `acl` (enlace conectado sin perfil conocido: broadcasts ACL + `BluetoothDevice.isConnected()` oculto). `wifiSsid` null sin permiso/servicio de ubicación. `hotspotClients`: `SoftApCallback` (API 30+, casi siempre bloqueado) → cantidad de IPs vecinas (ARP) si > 0 → null = desconocido; 0 con hotspot apagado | tableta |
+| `startConnectivityWatch` / `stopConnectivityWatch` | — | — (receivers BT/Wi-Fi/AP + NetworkCallback; emite `connectivity` al empezar y en cada cambio, antirrebote 500 ms, solo si cambió algo) | tableta |
+| `hasUsageAccess` | — | `bool` (AppOps `GET_USAGE_STATS`) | tableta |
+| `openUsageAccessSettings` | — | — (`ACTION_USAGE_ACCESS_SETTINGS` con/sin `package:` → info de la app) | tableta |
+| `setKeepInFront` | `{enabled, packages: [String], anyApp: bool, delayMs: int (0–60000, def. 1500), includeLauncher?: bool (def. false)}` | `bool` — true si el servicio quedó corriendo (o si se desactivó) | tableta |
+| `setFloatingBubble` | `{enabled, size: int dp (40–160, def. 64), opacity: double (0.2–1, def. 0.95), showTitle?: bool (def. true)}` | `bool` — false si falta "mostrar sobre otras apps" (la config se guarda igual) | tableta |
+| `updateFloatingBubble` | `{title, artist, art: Uint8List?, playing}` | — (se guarda aunque la burbuja no esté visible) | tableta |
+
+**Mantener al frente** (`KeepFrontService`, foreground `specialUse`, notificación "Pixel Car Player se
+mantiene al frente", canal `pcp_keep_front` de importancia baja). Cada ~1 s lee la app en primer plano con
+`UsageStatsManager.queryEvents` (último `ACTIVITY_RESUMED`). Dispara si no hay ninguna Activity nuestra en
+resumed y la app al frente: está en `packages` (siempre, aunque sea el launcher), o `anyApp` y no es
+Ajustes / SystemUI / instalador / permisos / DocumentsUI / Play Store, ni el launcher (salvo
+`includeLauncher`: apretar Inicio = el usuario quiere salir). Tras `delayMs` con la misma app al frente →
+`AppLauncher.bringToFront` (Android 10+ necesita "mostrar sobre otras apps"). **Sin acceso de uso** solo
+funciona con `anyApp`: dispara cuando MainActivity deja de estar al frente (sin saber qué app la tapó).
+No pelea con el usuario: si tuvo que volver 3 veces en 60 s por la misma app, deja de insistir con esa app
+5 min. Además se pausa (hasta que MainActivity vuelve) cuando la propia app abre Ajustes, diálogos de
+permisos, el selector de copias, el instalador o `launchApp` con `background:false` (si MainActivity sale
+del frente ≤ 8 s después de esa llamada).
+
+**Burbuja** (overlay `TYPE_APPLICATION_OVERLAY` dentro del mismo servicio): portada recortada en forma de
+"cookie" de 9 lóbulos que gira mientras `playing`, título · artista en marquesina debajo; tocar = traer
+Pixel al frente; mantener presionado y arrastrar = moverla (posición guardada). Visible solo mientras
+ninguna Activity nuestra está al frente.
+
+**Prefs nativas** `SharedPreferences("pcp_car")` (las lee `BootReceiver` para reanudar el servicio al
+encender / tras actualizar, independiente de `car_autostart`): `keep_front_enabled` (bool),
+`keep_front_packages` (StringSet), `keep_front_any_app` (bool), `keep_front_delay_ms` (long),
+`keep_front_include_launcher` (bool), `bubble_enabled` (bool), `bubble_size` (int dp), `bubble_opacity`
+(float), `bubble_show_title` (bool), `bubble_x` / `bubble_y` (int px, posición de la burbuja).
+
+**Actualizaciones**: `GET https://api.github.com/repos/SantiagortegaDev/pixel-car-player/releases?per_page=30`
+(incluye prereleases, ignora drafts). Nombre de asset esperado:
+`pixel-car-player-<versionName>-<versionCode>-<abi>.apk`, `abi` ∈ `arm64-v8a` \| `armeabi-v7a` \| `x86_64` \|
+`x86` \| `universal`. Por release se elige el asset de la ABI exacta (en el orden de `SUPPORTED_ABIS`) y si
+no, `universal`; cualquier otro `.apk` cuenta como universal sin versión. Gana el release más nuevo por
+versionName (numérico por partes, "1.10" > "1.9") y luego versionCode **base** (`code % 1000` si ≥ 1000,
+por el +1000×ABI de `--split-per-abi`). Si ningún release trae versionCode en el nombre, se usa el
+`published_at` más nuevo y `available` = publicado > `installedAt` + 10 min. La descarga va a
+`cacheDir/updates/update.apk`, se verifica tamaño (`Content-Length`) y que el APK sea de este paquete, y se
+instala con una sesión de `PackageInstaller` (respaldo: `ACTION_INSTALL_PACKAGE` con `FileProvider`
+`<pkg>.fileprovider`). Solo conserva los datos si está firmado con la misma clave (si no:
+`updateState` error `signature`).
+
+Eventos nuevos en `pcp/events`:
+
+| `type` | Campos |
+|--------|--------|
+| `connectivity` | mismos campos que `getConnectivityStatus` |
+| `updateProgress` | `received` (bytes), `total` (bytes, -1 si se desconoce); ≤ 4 por segundo y uno final |
+| `updateState` | `state`: `downloading` \| `installing` \| `error`; `error?`: `busy`, `badUrl`, `installPermission` (pedir `openInstallPermissionSettings`), `http_<código>`, `network`, `incomplete`, `invalidApk`, `installer`, `cancelled` (el usuario rechazó), `signature` (firma distinta / incompatible), `storage`, u otro texto del sistema |
+
+### §2 v3 — celular (emparejamiento, arranque automático): notas de implementación
+
+Métodos según `native_bridge.dart` (sección v3). Detalles que fija el nativo:
+
+- **Tokens**: `SharedPreferences("pcp_native")["paired_cars"]` = JSON `{carId: {token, name, pairedAt}}`
+  (`pairedAt` en ms epoch). `getPairedCars` → `[{id, name, pairedAt}]`, más reciente primero. `forgetCar`
+  también cierra las sesiones vivas de ese carro (si se reconecta, vuelve a pedir emparejamiento).
+- **Eventos**: `{type:'pairNeeded', carId, carName}` (se envió `pair_request`); `{type:'pairResult', carId,
+  ok, reason?}` (`reason`: lo que mande la tableta: `code` \| `expired` \| `busy`). Con `expired` el celular
+  pide otro código solo (nuevo `pairNeeded`). `submitPairCode` devuelve false si no hay una sesión con ese
+  carro esperando código (o el servicio no corre); el código se limpia a dígitos (4–10).
+- Si hay token pero el carro no manda `auth` en ~6 s tras su `hello`, se pide emparejar. Un carro sin
+  `nonce` en su `hello` (versión vieja) no puede autenticarse: con "Requerir emparejamiento" queda sin datos.
+- `transmitterStatus.clients[]` agrega `authenticated` (bool) y `pairing` (bool, esperando código).
+- **Reglas**: `pcp_native["autostart_rules"]` (JSON de las reglas). `stopAfterMinutes` por defecto 2,
+  rango 0–240. MACs en mayúsculas; SSID exacto (distingue mayúsculas). `associateCarDevice` agrega la
+  dirección asociada a `btAddresses` y empieza a observar su presencia (API 31+). Sin `address` usa la
+  primera de `btAddresses`; sin ninguna muestra el selector del sistema. `error`: `cancelled`,
+  `unsupported`, `noDevice`, `superseded` o el texto de CompanionDeviceManager.
+- `getAutoStartStatus` agrega `associated: [String]` (MACs asociadas con CompanionDeviceManager); `reason`
+  es un texto en español apto para mostrar.
+- Con reglas activas, el transmisor se detiene solo tras 10 min sin pantalla si ninguna regla coincide.
+  Si Android 12+ no deja iniciarlo desde segundo plano, se publica la notificación "Toca para transmitir
+  al carro" (canal `pcp_autostart`). Wi-Fi: el SSID solo se lee con ubicación concedida (en segundo plano,
+  Android 10+ exige ubicación "todo el tiempo"); si no, esa regla no dispara.
+
 ## 3. Paquete / ids
 
 - applicationId: `com.santiagortega.pixelcarplayer`

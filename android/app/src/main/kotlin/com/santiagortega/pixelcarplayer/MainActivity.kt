@@ -70,6 +70,8 @@ class MainActivity : FlutterActivity() {
 
     private fun handle(call: MethodCall, result: MethodChannel.Result) {
         val ctx: Context = applicationContext
+        if (CarFeatures.handle(this, call, result)) return // v3 tableta/actualizaciones/copias
+        if (PhoneFeatures.handle(this, call, result)) return // v3 celular: emparejamiento/arranque automático
         when (call.method) {
             // ---- both sides
             "getDeviceInfo" -> result.success(

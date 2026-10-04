@@ -41,6 +41,21 @@
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- v3 tableta: mantener al frente (app en primer plano) + servicio "specialUse" -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- v3 ambos: actualizaciones desde GitHub y copias de seguridad (< Android 10) -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <!-- v3 celular (PhoneFeatures/AutoStart): arranque automático con el Bluetooth del carro
+         (CompanionDeviceManager: presencia + iniciar el servicio en primer plano desde 2.º plano) -->
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_RUN_IN_BACKGROUND" />
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
+    <uses-permission android:name="android.permission.REQUEST_OBSERVE_COMPANION_DEVICE_PRESENCE" />
+    <uses-feature android:name="android.software.companion_device_setup" android:required="false" />
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
     <uses-feature android:name="android.hardware.wifi" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
@@ -109,6 +124,62 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- v3 (CarFeatures): mantener al frente + burbuja flotante -->
+        <service
+            android:name=".KeepFrontService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Mantiene la pantalla del reproductor del carro sobre la app de musica Bluetooth del radio y muestra una burbuja flotante" />
+        </service>
+        <!-- v3 (CarFeatures): selector de copias de seguridad / permisos sin tocar MainActivity -->
+        <activity
+            android:name=".CarHelperActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <!-- v3 (AppUpdater): instalar el APK descargado por ACTION_VIEW -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/pcp_file_paths" />
+        </provider>
+        <!-- v3 celular (AutoStart): Bluetooth ACL/A2DP del carro, Wi-Fi (PendingIntent) y arranque -->
+        <receiver
+            android:name=".AutoStartReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
+                <action android:name="android.bluetooth.device.action.ACL_DISCONNECTED" />
+                <action android:name="android.bluetooth.a2dp.profile.action.CONNECTION_STATE_CHANGED" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+        <!-- v3 celular (API 31+): presencia del Bluetooth del carro asociado (CompanionDeviceManager) -->
+        <service
+            android:name=".CarPresenceService"
+            android:exported="true"
+            android:permission="android.permission.BIND_COMPANION_DEVICE_SERVICE">
+            <intent-filter>
+                <action android:name="android.companion.CompanionDeviceService" />
+            </intent-filter>
+        </service>
+        <!-- v3 celular: diálogo de asociación de CompanionDeviceManager sin tocar MainActivity -->
+        <activity
+            android:name=".CarAssociateActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|density|uiMode"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

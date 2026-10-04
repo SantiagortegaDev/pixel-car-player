@@ -53,6 +53,8 @@ class PhoneNetLink(
         private const val BACKOFF_MAX_MS = 10_000L
         private const val CAR_BEACON_TTL_MS = 30_000L
         private const val BEACON_SUMMARY_MS = 60_000L
+        /** v3: tras un cambio de red / caída, se considera "marcando activamente" este tiempo. */
+        private const val ACTIVE_DIAL_WINDOW_MS = 2 * 60_000L
         const val PREF_FILE = "FlutterSharedPreferences"
         const val PREF_CAR_IP = "flutter.phone_car_ip"
     }
@@ -64,6 +66,14 @@ class PhoneNetLink(
     )
 
     @Volatile private var running = false
+
+    /**
+     * v3 (batería): true mientras se marca al carro con chances reales (≤ 2 min desde un cambio de
+     * red / caída de pantalla, o hay `car_beacon` reciente). El dueño toma el Wi-Fi lock solo así.
+     */
+    @Volatile var dialingActive = false
+        private set
+    @Volatile private var lastPokeAt = 0L
     private val threads = mutableListOf<Thread>()
     private val tracked = ConcurrentHashMap<Network, Long>()
     private val netDesc = ConcurrentHashMap<Network, String>()
@@ -92,6 +102,7 @@ class PhoneNetLink(
     fun start() {
         if (running) return
         running = true
+        lastPokeAt = SystemClock.elapsedRealtime()
         LinkDiag.log("enlace: inicio (id ${installId.take(8)})")
         registerCallback()
         spawn("pcp-beacon") { beaconLoop() }
@@ -102,6 +113,7 @@ class PhoneNetLink(
     fun stop() {
         if (!running) return
         running = false
+        dialingActive = false
         unregisterCallback()
         poke("stop")
         threads.forEach { it.interrupt() }
@@ -133,6 +145,7 @@ class PhoneNetLink(
 
     /** Despierta al marcador y reinicia el backoff (cambios de red, beacons, cliente caído). */
     fun poke(reason: String) {
+        lastPokeAt = SystemClock.elapsedRealtime()
         synchronized(wake) {
             poked = true
             wake.notifyAll()
@@ -448,6 +461,7 @@ class PhoneNetLink(
         var backoff = BACKOFF_MIN_MS
         while (running) {
             if (hasClients()) {
+                dialingActive = false
                 waitPoke(2_000)
                 backoff = BACKOFF_MIN_MS
                 continue
@@ -457,6 +471,10 @@ class PhoneNetLink(
             } catch (e: Exception) {
                 emptyList()
             }
+            dialingActive = targets.isNotEmpty() && (
+                SystemClock.elapsedRealtime() - lastPokeAt < ACTIVE_DIAL_WINDOW_MS ||
+                    targets.any { it.label == "car_beacon" }
+                )
             if (targets.isEmpty()) {
                 LinkDiag.throttled("dial-none", 60_000) {
                     "marcar: sin destinos (ni gateway Wi-Fi, ni car_beacon, ni IP manual)"
