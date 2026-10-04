@@ -40,6 +40,29 @@ La tableta interpola la posición con su propio reloj desde el instante en que r
   IP manual guardada. Primera conexión TCP exitosa gana. Reintento con backoff (1 s → 10 s).
 - Si no llega `ping` en 25 s → se considera caída y se reconecta.
 
+### v2 — enlace bidireccional (ambos lados escuchan y ambos marcan)
+
+Motivo: en Android 10+ un Wi-Fi sin internet (hotspot del carro) no es la red por defecto
+del celular; los sockets sin enlazar salen por datos móviles y los beacons UDP del celular
+no llegan. Por eso el celular también **marca al carro** con sockets enlazados a la red Wi-Fi
+(`Network.bindSocket`), y el orden en que se abren las apps deja de importar.
+
+- **Tableta**: además de marcar al celular, escucha TCP **47323** y emite cada 2 s un beacon UDP
+  al puerto **47324**: `{"t":"car_beacon","v":2,"device":"<modelo>","id":"<id>","port":47323}`.
+- **Celular**: además de su servidor 47321 y su beacon, marca al carro en: IP del **gateway** de
+  cada red Wi-Fi (el carro cuando es hotspot), IPs de `car_beacon` recibidos (escucha 47324 en
+  cada red Wi-Fi) e IP manual. Reintento con backoff 1→10 s y de inmediato ante cambios de red
+  (`NetworkCallback`). Deja de marcar mientras tenga una pantalla conectada (cualquier sentido).
+- El protocolo de líneas es el mismo sin importar quién inició la conexión: al conectar, el
+  **celular** envía `hello`+snapshot; la **tableta** envía `hello`+`resync`.
+- `hello` lleva `id` (identificador estable de instalación). La tableta mantiene **un solo**
+  enlace: si llega otro con el mismo `id` del celular mientras hay uno activo y sano, cierra el
+  nuevo; si el activo no respondió en 25 s, se queda con el nuevo. El celular hace lo mismo
+  por `id` del carro (una conexión por carro).
+- Tableta → celular `{"t":"hotspot","ssid":str,"password":str}` tras `hello` (si el usuario lo
+  permite, activado por defecto): el celular registra la red para unirse solo
+  (`setHotspotAutoConnect`) y la guarda.
+
 ## 2. Canal nativo (Flutter ⇄ Kotlin)
 
 `MethodChannel("pcp/native")` — en web/desktop no existe: el código Dart debe protegerse con
