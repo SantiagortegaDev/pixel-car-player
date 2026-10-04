@@ -97,6 +97,7 @@ class PhoneController extends ChangeNotifier with WidgetsBindingObserver {
   static const _kHsSsid = 'phone_car_hotspot_ssid';
   static const _kHsPass = 'phone_car_hotspot_password';
   static const _kHsAuto = 'phone_car_hotspot_autoconnect';
+  static const _kCarIp = 'phone_car_ip';
 
   bool get supported => _bridge.isSupported;
 
@@ -118,6 +119,21 @@ class PhoneController extends ChangeNotifier with WidgetsBindingObserver {
   bool wifiConnected = false;
   String? wifiSsid;
 
+  /// IP manual del carro (la lee el marcador nativo: `flutter.phone_car_ip`).
+  String carIp = '';
+
+  /// SSID que la tableta compartió (evento `hotspotReceived`); `receivedTick`
+  /// sube con cada evento para que la tarjeta recargue sus campos.
+  String? receivedSsid;
+  int receivedTick = 0;
+
+  /// Sube cuando las prefs se recargan (al volver a la app) para refrescar campos.
+  int reloadTick = 0;
+
+  // Diagnóstico del enlace.
+  List<String> linkLines = const [];
+  List<Map<String, dynamic>> linkNetworks = const [];
+
   StreamSubscription<Map<String, dynamic>>? _sub;
   bool _disposed = false;
 
@@ -137,6 +153,7 @@ class PhoneController extends ChangeNotifier with WidgetsBindingObserver {
       hotspotSsid = p.getString(_kHsSsid) ?? '';
       hotspotPassword = p.getString(_kHsPass) ?? '';
       hotspotAuto = p.getBool(_kHsAuto) ?? false;
+      carIp = p.getString(_kCarIp) ?? '';
     } catch (_) {}
     hotspotLoaded = true;
 
@@ -171,6 +188,13 @@ class PhoneController extends ChangeNotifier with WidgetsBindingObserver {
 
     _sub = _bridge.events.listen((e) {
       if (e['type'] == 'transmitterStatus') _applyStatus(e);
+      if (e['type'] == 'hotspotReceived') {
+        if (e['ok'] == false) {
+          reloadHotspotPrefs().then((_) => _notify());
+        } else {
+          onHotspotReceived('${e['ssid'] ?? ''}');
+        }
+      }
     });
     await refreshPermissions();
     _applyStatus(await _bridge.getTransmitterStatus());
@@ -190,6 +214,79 @@ class PhoneController extends ChangeNotifier with WidgetsBindingObserver {
       } catch (_) {}
     }
     await refreshWifi();
+  }
+
+  /// La tableta mandó las credenciales de su hotspot: el nativo ya las guardó en
+  /// las prefs, aquí se recargan y se avisa a la UI.
+  Future<void> onHotspotReceived(String ssid) async {
+    await reloadHotspotPrefs();
+    receivedSsid = ssid.isNotEmpty ? ssid : (hotspotSsid.isNotEmpty ? hotspotSsid : null);
+    receivedTick++;
+    _notify();
+    refreshWifi();
+  }
+
+  Future<void> reloadHotspotPrefs() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.reload();
+      hotspotSsid = p.getString(_kHsSsid) ?? '';
+      hotspotPassword = p.getString(_kHsPass) ?? '';
+      hotspotAuto = p.getBool(_kHsAuto) ?? false;
+      carIp = p.getString(_kCarIp) ?? '';
+      reloadTick++;
+    } catch (_) {}
+  }
+
+  Future<void> setCarIp(String v) async {
+    carIp = v.trim();
+    try {
+      final p = await SharedPreferences.getInstance();
+      if (carIp.isEmpty) {
+        await p.remove(_kCarIp);
+      } else {
+        await p.setString(_kCarIp, carIp);
+      }
+    } catch (_) {}
+  }
+
+  /// Redes Wi-Fi + últimas líneas del registro del enlace (vacío sin nativo).
+  Future<void> refreshLink() async {
+    if (_disposed) return;
+    try {
+      final d = await _bridge.getLinkDiagnostics();
+      final lines = ((d['lines'] as List?) ?? const []).map((e) => '$e').toList();
+      var nets = ((d['networks'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      if (nets.isEmpty) nets = await _wifiNetworks();
+      linkLines = lines.length > 40 ? lines.sublist(lines.length - 40) : lines;
+      linkNetworks = nets;
+    } catch (_) {
+      linkLines = const [];
+      linkNetworks = const [];
+    }
+    _notify();
+  }
+
+  Future<List<Map<String, dynamic>>> _wifiNetworks() async {
+    try {
+      return (await _bridge.getWifiNetworks())
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> clearLink() async {
+    try {
+      await _bridge.clearLinkDiagnostics();
+    } catch (_) {}
+    linkLines = const [];
+    _notify();
   }
 
   /// Estado del Wi-Fi del celular (vacío en web / sin nativo).
@@ -362,6 +459,7 @@ class PhoneController extends ChangeNotifier with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed && supported) {
       refreshPermissions();
       refreshWifi();
+      reloadHotspotPrefs().then((_) => _notify());
     }
   }
 

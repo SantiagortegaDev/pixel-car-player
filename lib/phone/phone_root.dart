@@ -4,6 +4,7 @@ import 'package:pixel_car_player/core/theme/app_theme.dart';
 import 'package:pixel_car_player/phone/phone_controller.dart';
 import 'package:pixel_car_player/phone/widgets/hotspot_card.dart';
 import 'package:pixel_car_player/phone/widgets/hx/hx.dart';
+import 'package:pixel_car_player/phone/widgets/link_diagnostics_card.dart';
 import 'package:pixel_car_player/phone/widgets/phone_widgets.dart';
 
 /// Raíz del modo celular (transmisor), con el aspecto de Harmonix v2: barra de
@@ -347,6 +348,12 @@ class _ConnectionView extends StatelessWidget {
       const SizedBox(height: 24),
       const HxSectionTitle('Hotspot del carro', icon: Symbols.wifi_tethering_rounded),
       HotspotCard(c: c),
+      const SizedBox(height: 24),
+      const HxSectionTitle(
+        'Diagnóstico de conexión',
+        icon: Symbols.troubleshoot_rounded,
+      ),
+      LinkDiagnosticsCard(c: c),
     ],
   );
 }

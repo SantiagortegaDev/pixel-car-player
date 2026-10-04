@@ -16,12 +16,16 @@ class HxTextField extends StatelessWidget {
     this.obscure = false,
     this.suffix,
     this.onChanged,
+    this.helper,
+    this.keyboardType,
   });
   final TextEditingController controller;
   final String label;
   final bool obscure;
   final Widget? suffix;
   final ValueChanged<String>? onChanged;
+  final String? helper;
+  final TextInputType? keyboardType;
 
   @override
   Widget build(BuildContext context) {
@@ -34,12 +38,16 @@ class HxTextField extends StatelessWidget {
       controller: controller,
       obscureText: obscure,
       onChanged: onChanged,
+      keyboardType: keyboardType,
       autocorrect: false,
       enableSuggestions: !obscure,
       style: HxType.bodyL(cs.onSurface),
       cursorColor: cs.primary,
       decoration: InputDecoration(
         labelText: label,
+        helperText: helper,
+        helperMaxLines: 3,
+        helperStyle: HxType.bodyM(cs.onSurfaceVariant),
         labelStyle: HxType.bodyM(cs.onSurfaceVariant),
         floatingLabelStyle: HxType.bodyM(cs.primary),
         filled: true,
@@ -68,6 +76,9 @@ class HotspotCard extends StatefulWidget {
 class _HotspotCardState extends State<HotspotCard> {
   final _ssid = TextEditingController();
   final _pass = TextEditingController();
+  final _ip = TextEditingController();
+  int _tick = 0;
+  int _reload = 0;
   bool _show = false;
   bool _seeded = false;
   Timer? _timer;
@@ -77,7 +88,10 @@ class _HotspotCardState extends State<HotspotCard> {
   @override
   void initState() {
     super.initState();
+    _tick = c.receivedTick;
+    _reload = c.reloadTick;
     c.addListener(_seed);
+    c.addListener(_onReceived);
     _seed();
     c.refreshWifi();
     _timer = Timer.periodic(
@@ -90,14 +104,48 @@ class _HotspotCardState extends State<HotspotCard> {
   void _seed() {
     if (_seeded || !c.hotspotLoaded) return;
     _seeded = true;
+    _fill();
+  }
+
+  void _fill() {
     _ssid.text = c.hotspotSsid;
     _pass.text = c.hotspotPassword;
+    _ip.text = c.carIp;
+  }
+
+  /// La tableta compartió su hotspot: recarga los campos y avisa.
+  void _onReceived() {
+    if (c.reloadTick != _reload) {
+      _reload = c.reloadTick;
+      if (_seeded && mounted) _fill();
+    }
+    if (c.receivedTick == _tick) return;
+    _tick = c.receivedTick;
+    if (!mounted) return;
+    _fill();
+    final cs = Theme.of(context).colorScheme;
+    final name = c.receivedSsid ?? c.hotspotSsid;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: cs.inverseSurface,
+          shape: RoundedRectangleBorder(borderRadius: HxRadius.m),
+          content: Text(
+            'La tableta compartió su hotspot «$name»: el celular se unirá solo',
+            style: HxType.bodyM(cs.onInverseSurface),
+          ),
+        ),
+      );
   }
 
   @override
   void dispose() {
     _timer?.cancel();
     c.removeListener(_seed);
+    c.removeListener(_onReceived);
+    _ip.dispose();
     _ssid.dispose();
     _pass.dispose();
     super.dispose();
@@ -147,6 +195,18 @@ class _HotspotCardState extends State<HotspotCard> {
               value: c.hotspotAuto,
               onChanged: c.hotspotBusy ? (_) {} : _apply,
             ),
+            if (c.receivedSsid != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 14),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: HxChip(
+                    label: 'Recibido del carro',
+                    icon: Symbols.check_circle_rounded,
+                    on: true,
+                  ),
+                ),
+              ),
             HxSettingsItem(
               label: 'Red del carro',
               description:
@@ -185,6 +245,17 @@ class _HotspotCardState extends State<HotspotCard> {
                     ),
                   ),
                 ],
+              ),
+            ),
+            HxSettingsItem(
+              label: 'Dirección del carro',
+              child: HxTextField(
+                controller: _ip,
+                label: 'IP del carro (opcional)',
+                helper:
+                    'Solo si no se conectan solos: la IP de la tableta, p. ej. 192.168.43.1.',
+                keyboardType: TextInputType.number,
+                onChanged: c.setCarIp,
               ),
             ),
             HxSettingsItem(
