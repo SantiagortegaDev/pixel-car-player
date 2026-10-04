@@ -4,11 +4,6 @@ on:
   push:
     branches: [ main, 'claude/**' ]
   workflow_dispatch:
-    inputs:
-      version_tag:
-        description: 'Etiqueta de versión (opcional). Ej: v1.0.0-beta.1'
-        required: false
-        type: string
 
 permissions:
   contents: write
@@ -40,7 +35,7 @@ jobs:
       - name: Flutter version
         run: flutter --version
 
-      - name: Download Android keystore (opcional)
+      - name: Download Android keystore (opcional, sobrescribe el keystore público del repo)
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
@@ -74,44 +69,86 @@ jobs:
       - name: Test
         run: flutter test
 
-      - name: Compute version tag
+      - name: Compute version
         id: version
         run: |
-          if [ -n "${{ inputs.version_tag }}" ]; then
-            echo "tag=${{ inputs.version_tag }}" >> $GITHUB_OUTPUT
-          else
-            TS=$(date +'%Y%m%d-%H%M%S')
-            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-            echo "tag=beta-${TS}-${SHORT_SHA}" >> $GITHUB_OUTPUT
-          fi
+          RUN=${{ github.run_number }}
+          echo "name=1.${RUN}.0" >> $GITHUB_OUTPUT
+          echo "code=$((RUN + 100))" >> $GITHUB_OUTPUT
 
-      - name: Build APK (release)
-        run: flutter build apk --release --no-tree-shake-icons
+      - name: Build APKs por ABI (release)
+        run: |
+          flutter build apk --release --split-per-abi --no-tree-shake-icons \
+            --build-name ${{ steps.version.outputs.name }} \
+            --build-number ${{ steps.version.outputs.code }}
 
-      - name: Rename APK
+      - name: Copy split APKs
+        env:
+          VN: ${{ steps.version.outputs.name }}
+          VC: ${{ steps.version.outputs.code }}
         run: |
           mkdir -p output
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            cp "build/app/outputs/flutter-apk/app-${abi}-release.apk" \
+              "output/pixel-car-player-${VN}-${VC}-${abi}.apk"
+          done
+
+      - name: Build APK universal (release)
+        env:
+          VN: ${{ steps.version.outputs.name }}
+          VC: ${{ steps.version.outputs.code }}
+        run: |
+          flutter build apk --release --no-tree-shake-icons \
+            --build-name "$VN" --build-number "$VC"
           cp build/app/outputs/flutter-apk/app-release.apk \
-            output/pixel-car-player-${{ steps.version.outputs.tag }}.apk
+            "output/pixel-car-player-${VN}-${VC}-universal.apk"
+          ls -lh output
+
+      - name: Verify signature
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          for f in output/*.apk; do
+            echo "== $f"
+            "$APKSIGNER" verify --print-certs "$f" | grep -E 'Signer #1 certificate (DN|SHA-256)'
+          done
 
       - name: Generate release notes
         env:
-          TAG: ${{ steps.version.outputs.tag }}
+          VN: ${{ steps.version.outputs.name }}
+          VC: ${{ steps.version.outputs.code }}
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
         run: |
+          PREV=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          if [ -n "$PREV" ]; then
+            git log --no-merges --pretty='- %s (%h)' "${PREV}..HEAD" | head -20 > output/commits.txt
+          else
+            git log --no-merges --pretty='- %s (%h)' -20 > output/commits.txt
+          fi
+          [ -s output/commits.txt ] || echo "- (sin cambios desde la versión anterior)" > output/commits.txt
+
           cat > output/release-notes.md <<EOF
-          # Pixel Car Player ${TAG}
+          # Pixel Car Player ${VN}
 
-          Build automático desde la rama \`${{ github.ref_name }}\` (commit ${{ github.sha }}).
+          Build automático desde \`${BRANCH}\` (commit ${SHA:0:7}), versionCode ${VC}.
 
-          ## Cómo instalar
-          1. Descarga el archivo \`.apk\` de abajo (el mismo APK sirve para celular y tableta).
-          2. En cada Android, activa "Instalar apps de origen desconocido".
-          3. Abre el APK, confirma la instalación y elige el modo:
-             **Transmisor** en el celular, **Pantalla del carro** en la tableta.
+          ## Qué APK instalar
+          | APK | Cuándo usarlo |
+          |---|---|
+          | \`pixel-car-player-${VN}-${VC}-arm64-v8a.apk\` | Celulares modernos y la mayoría de tabletas de 64 bits. |
+          | \`pixel-car-player-${VN}-${VC}-armeabi-v7a.apk\` | Head units / radios Android viejos (32 bits). **Si el arm64 no instala en la tableta del carro, prueba este.** |
+          | \`pixel-car-player-${VN}-${VC}-x86_64.apk\` | Emuladores y dispositivos x86. |
+          | \`pixel-car-player-${VN}-${VC}-universal.apk\` | Funciona en cualquier dispositivo (pesa más). Si dudas, usa este. |
 
-          > Build **Beta**. Puede contener bugs.
+          ## Actualizar
+          Instala el APK nuevo **encima** del anterior: conserva tus datos y configuración
+          (todos los builds usan la misma clave de firma).
 
+          ## Cambios recientes
           EOF
+          cat output/commits.txt >> output/release-notes.md
+          printf '\n> Build **Beta**. Puede contener bugs.\n' >> output/release-notes.md
+          rm output/commits.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -124,12 +161,13 @@ jobs:
         if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: Pixel Car Player ${{ steps.version.outputs.tag }}
+          tag_name: v${{ steps.version.outputs.name }}
+          name: Pixel Car Player ${{ steps.version.outputs.name }}
+          target_commitish: ${{ github.sha }}
           body_path: output/release-notes.md
           files: output/*.apk
-          prerelease: true
+          prerelease: false
           draft: false
-          make_latest: false
+          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

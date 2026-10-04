@@ -6,10 +6,20 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-// Firma release opcional: android/key.properties (lo genera el workflow de CI desde secrets).
-val keystoreProperties = Properties().apply {
-    val f = rootProject.file("key.properties")
-    if (f.exists()) f.inputStream().use { load(it) }
+// Firma release, por orden de prioridad:
+//  1. android/key.properties (lo genera el CI desde secrets; storeFile relativo a android/app/)
+//  2. android/keystore/keystore.properties (keystore público del repo; storeFile relativo a android/)
+//  3. clave debug (último recurso)
+val signingFromSecrets = rootProject.file("key.properties")
+val signingFromRepo = rootProject.file("keystore/keystore.properties")
+val keystoreProperties = Properties()
+var keystoreBaseDir: File = projectDir
+when {
+    signingFromSecrets.exists() -> signingFromSecrets.inputStream().use { keystoreProperties.load(it) }
+    signingFromRepo.exists() -> {
+        signingFromRepo.inputStream().use { keystoreProperties.load(it) }
+        keystoreBaseDir = rootProject.projectDir
+    }
 }
 
 android {
@@ -41,7 +51,7 @@ android {
     signingConfigs {
         if (keystoreProperties.containsKey("storeFile")) {
             create("release") {
-                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storeFile = File(keystoreBaseDir, keystoreProperties.getProperty("storeFile"))
                 storePassword = keystoreProperties.getProperty("storePassword")
                 keyAlias = keystoreProperties.getProperty("keyAlias")
                 keyPassword = keystoreProperties.getProperty("keyPassword")
@@ -51,7 +61,7 @@ android {
 
     buildTypes {
         release {
-            // Sin keystore configurado se firma con la clave debug (instalable igual).
+            // Release: misma firma siempre (permite actualizar encima); sin keystore, clave debug.
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
@@ -69,6 +79,8 @@ flutter {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
+    // MediaControllerCompat: shuffle/repeat/customActions del reproductor seguido (v3).
+    implementation("androidx.media:media:1.7.0")
     testImplementation("junit:junit:4.13.2")
     // org.json real para los tests JVM (el de android.jar es un stub que lanza "Stub!").
     testImplementation("org.json:json:20240303")

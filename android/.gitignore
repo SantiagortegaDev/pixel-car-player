@@ -13,3 +13,8 @@ key.properties
 **/*.keystore
 **/*.jks
 **/*.jks
+
+# Excepción: keystore de release público de este proyecto (ver README)
+!keystore/
+!keystore/pixelcarplayer-release.jks
+!keystore/keystore.properties
