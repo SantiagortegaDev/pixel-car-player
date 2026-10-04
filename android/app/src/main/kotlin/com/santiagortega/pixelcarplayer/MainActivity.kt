@@ -103,6 +103,12 @@ class MainActivity : FlutterActivity() {
                 result.success(null)
             }
             "getLocalIps" -> background(result) { NetUtils.localIps() }
+            "getLinkDiagnostics" -> background(result) { TransmitterService.linkDiagnostics(ctx) }
+            "clearLinkDiagnostics" -> {
+                LinkDiag.clear()
+                result.success(null)
+            }
+            "getWifiNetworks" -> background(result) { TransmitterService.wifiNetworks(ctx) }
 
             // ---- phone (transmitter)
             "startTransmitter" -> {
@@ -166,7 +172,11 @@ class MainActivity : FlutterActivity() {
 
             // ---- car: hotspot
             "getHotspotState" -> background(result) { Hotspot.state(ctx) }
-            "setHotspotEnabled" -> setHotspotEnabled(call.argument<Boolean>("enabled") ?: true, result)
+            "setHotspotEnabled" -> setHotspotEnabled(
+                call.argument<Boolean>("enabled") ?: true,
+                call.argument<Boolean>("allowLocalOnly") ?: false,
+                result,
+            )
             "openHotspotSettings" -> {
                 Hotspot.openSettings(this)
                 result.success(null)
@@ -233,10 +243,11 @@ class MainActivity : FlutterActivity() {
     }
 
     /**
-     * System paths (tethering / wifiAp) off the main thread; if enabling failed, falls back to a
-     * LocalOnlyHotspot after asking for the runtime permissions it needs.
+     * System paths (tethering / wifiAp) off the main thread. Only with [allowLocalOnly] does a failed
+     * enable fall back to a LocalOnlyHotspot (random SSID/password, not the one configured in the
+     * head unit's settings), after asking for the runtime permissions it needs.
      */
-    private fun setHotspotEnabled(enabled: Boolean, result: MethodChannel.Result) {
+    private fun setHotspotEnabled(enabled: Boolean, allowLocalOnly: Boolean, result: MethodChannel.Result) {
         val ctx = applicationContext
         io.execute {
             val first = try {
@@ -245,7 +256,7 @@ class MainActivity : FlutterActivity() {
                 Log.e(TAG, "setHotspotEnabled failed", e)
                 mapOf("ok" to false, "method" to "none", "needsSettings" to true, "error" to e.message)
             }
-            if (first["ok"] == true || !enabled || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            if (first["ok"] == true || !enabled || !allowLocalOnly || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
                 main.post { result.success(first) }
                 return@execute
             }
@@ -349,13 +360,16 @@ class MainActivity : FlutterActivity() {
                 setReferenceCounted(false)
                 acquire()
             }
+            LinkDiag.log("multicast lock adquirido")
         } catch (e: Exception) {
             Log.w(TAG, "multicast lock failed", e)
+            LinkDiag.log("multicast lock falló: ${LinkDiag.errClass(e)}")
         }
     }
 
     private fun releaseMulticastLock() {
         try {
+            if (multicastLock?.isHeld == true) LinkDiag.log("multicast lock liberado")
             multicastLock?.takeIf { it.isHeld }?.release()
         } catch (_: Exception) {
         }

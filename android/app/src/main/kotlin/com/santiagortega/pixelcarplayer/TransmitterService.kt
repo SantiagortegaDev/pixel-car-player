@@ -29,8 +29,6 @@ import java.io.Closeable
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.OutputStream
-import java.net.DatagramPacket
-import java.net.DatagramSocket
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.util.concurrent.CopyOnWriteArrayList
@@ -61,8 +59,11 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
         private const val PING_INTERVAL_MS = 10_000L
         private const val CLIENT_TIMEOUT_MS = 30_000L
         private const val STATE_INTERVAL_MS = 5_000L
-        private const val BEACON_INTERVAL_MS = 2_000L
         private const val MAX_QUEUE = 256
+        private const val FLUTTER_PREFS = "FlutterSharedPreferences"
+        private const val PREF_HS_SSID = "flutter.phone_car_hotspot_ssid"
+        private const val PREF_HS_PASS = "flutter.phone_car_hotspot_password"
+        private const val PREF_HS_AUTO = "flutter.phone_car_hotspot_autoconnect"
 
         @Volatile
         var instance: TransmitterService? = null
@@ -99,7 +100,18 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
             "clients" to emptyList<Map<String, Any?>>(),
             "session" to null,
             "lyricsStatus" to "none",
+            "carHotspotSsid" to null,
         )
+
+        /** `getLinkDiagnostics`: registro + redes (ambos lados; las redes del callback si corre). */
+        fun linkDiagnostics(context: Context): Map<String, Any?> = mapOf(
+            "lines" to LinkDiag.lines(),
+            "networks" to wifiNetworks(context),
+        )
+
+        /** `getWifiNetworks` (incluye las redes que vio el NetworkCallback del transmisor). */
+        fun wifiNetworks(context: Context): List<Map<String, Any?>> =
+            WifiNets.describe(context, instance?.netLink?.trackedNetworks()?.toList().orEmpty())
     }
 
     // ------------------------------------------------------------------ fields
@@ -115,6 +127,11 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
     @Volatile private var tcpServer: ServerSocket? = null
     @Volatile private var btServer: BluetoothServerSocket? = null
     private val clients = CopyOnWriteArrayList<Client>()
+    @Volatile private var netLink: PhoneNetLink? = null
+    private lateinit var installId: String
+    private val miscExec: ExecutorService = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "pcp-misc").apply { isDaemon = true }
+    }
 
     private var sourcePackage: String? = DEFAULT_SOURCE
 
@@ -141,6 +158,7 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var multicastLock: WifiManager.MulticastLock? = null
 
     // ------------------------------------------------------------------ lifecycle
 
@@ -151,6 +169,7 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
         instance = this
         workerThread = HandlerThread("pcp-tx").also { it.start() }
         worker = Handler(workerThread.looper)
+        installId = InstallId.get(this)
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         sourcePackage = if (prefs.getBoolean("tx_any", false)) null
         else prefs.getString("tx_source", DEFAULT_SOURCE)
@@ -198,9 +217,12 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
         }
         threads.forEach { it.interrupt() }
         threads.clear()
+        netLink?.stop()
+        netLink = null
         clients.forEach { it.close("service stopped") }
         clients.clear()
         lyricsExec.shutdownNow()
+        miscExec.shutdownNow()
         worker.removeCallbacksAndMessages(null)
         worker.post { watcher.stop() }
         workerThread.quitSafely()
@@ -220,7 +242,26 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
         worker.postDelayed(tick, 1000)
         spawn("pcp-tcp-server") { tcpLoop() }
         spawn("pcp-rfcomm-server") { rfcommLoop() }
-        spawn("pcp-beacon") { beaconLoop() }
+        netLink = PhoneNetLink(
+            ctx = this,
+            device = Build.MODEL ?: "Android",
+            installId = installId,
+            hasClients = { clients.any { !it.closed } },
+            onDialed = { sock, ip, label -> onDialed(sock, ip, label) },
+        ).also { it.start() }
+    }
+
+    /** Conexión saliente al carro (TCP 47323): idéntica a una aceptada. */
+    private fun onDialed(s: java.net.Socket, ip: String, label: String) {
+        try {
+            addClient(Client("wifi", ip, s.getInputStream(), s.getOutputStream(), s, origin = "dial"))
+        } catch (e: Exception) {
+            LinkDiag.log("cliente marcado $ip no se pudo iniciar: ${LinkDiag.errClass(e)}")
+            try {
+                s.close()
+            } catch (_: Exception) {
+            }
+        }
     }
 
     private fun spawn(name: String, body: () -> Unit) {
@@ -327,6 +368,16 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
         } catch (e: Exception) {
             Log.w(TAG, "wifi lock failed", e)
         }
+        try {
+            // Sin esto muchos chips filtran los broadcasts (car_beacon) con la pantalla apagada.
+            val wm = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
+            multicastLock = wm.createMulticastLock("PixelCarPlayer:tx").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "multicast lock failed", e)
+        }
     }
 
     private fun releaseLocks() {
@@ -338,8 +389,13 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
             wifiLock?.takeIf { it.isHeld }?.release()
         } catch (_: Exception) {
         }
+        try {
+            multicastLock?.takeIf { it.isHeld }?.release()
+        } catch (_: Exception) {
+        }
         wakeLock = null
         wifiLock = null
+        multicastLock = null
     }
 
     // ------------------------------------------------------------------ media callbacks (worker)
@@ -517,7 +573,7 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
 
     // ------------------------------------------------------------------ status
 
-    private fun emitStatus() {
+    private fun emitStatus(force: Boolean = false) {
         val c = watcher.controller
         val t = currentTrack
         val session = c?.let {
@@ -534,12 +590,16 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
             "port" to LinkProtocol.TCP_PORT,
             "ips" to lastIps.ifEmpty { NetUtils.localIps().also { lastIps = it } },
             "clients" to clients.filter { !it.closed }.map {
-                mapOf("device" to it.device, "transport" to it.transport, "address" to it.address)
+                mapOf(
+                    "device" to it.device, "transport" to it.transport, "address" to it.address,
+                    "origin" to it.origin, "id" to it.peerId,
+                )
             },
             "session" to session,
             "lyricsStatus" to lyricsStatus,
+            "carHotspotSsid" to storedCarHotspot().first.ifEmpty { null },
         )
-        if (status == lastStatus) return
+        if (status == lastStatus && !force) return
         val prevClients = (lastStatus?.get("clients") as? List<*>)?.size
         lastStatus = status
         EventHub.post(status)
@@ -568,10 +628,21 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
             return
         }
         Log.i(TAG, "Client connected: ${c.transport} ${c.address}")
+        LinkDiag.log(
+            when (c.origin) {
+                "dial" -> "conectado al carro ${c.address} (marcado)"
+                "accept" -> "pantalla aceptada ${c.address} (${c.transport})"
+                else -> "pantalla conectada ${c.address} (${c.transport})"
+            }
+        )
         c.start()
         worker.post {
             clients += c
-            c.send(LinkProtocol.hello(Build.MODEL ?: "Android", watcher.controller?.packageName ?: sourcePackage ?: ""))
+            c.send(
+                LinkProtocol.hello(
+                    Build.MODEL ?: "Android", watcher.controller?.packageName ?: sourcePackage ?: "", installId,
+                )
+            )
             sendSnapshot(c)
             retryLyricsIfNeeded()
             emitStatus()
@@ -583,6 +654,7 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
             Log.i(TAG, "Client disconnected: ${c.transport} ${c.address}")
         }
         emitStatus()
+        if (clients.none { !it.closed }) netLink?.poke("sin pantallas")
     }
 
     private fun onLine(c: Client, line: String) {
@@ -591,6 +663,12 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
             "hello" -> {
                 val dev = msg.optString("device", "")
                 if (dev.isNotBlank()) c.device = dev
+                c.lastAliveAt = SystemClock.elapsedRealtime()
+                val id = msg.optString("id", "").trim()
+                if (id.isNotEmpty()) {
+                    c.peerId = id
+                    dedupById(c, id)
+                }
                 emitStatus()
             }
             "cmd" -> handleCmd(msg)
@@ -598,8 +676,70 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
                 sendSnapshot(c)
                 retryLyricsIfNeeded()
             }
-            "pong" -> Unit
+            "pong" -> c.lastAliveAt = SystemClock.elapsedRealtime()
+            "hotspot" -> LinkProtocol.parseHotspot(msg)?.let { (ssid, pass) -> onCarHotspot(ssid, pass) }
             else -> Unit // unknown messages are ignored (CONTRACT §1)
+        }
+    }
+
+    /** Una conexión por carro (CONTRACT §1 v2): ver [LinkDedup]. Hilo worker. */
+    private fun dedupById(c: Client, id: String) {
+        val now = SystemClock.elapsedRealtime()
+        for (o in clients) {
+            if (o === c || o.closed || o.peerId != id) continue
+            val (older, newer) = if (o.connectedAt <= c.connectedAt) o to c else c to o
+            val keepOlder = LinkDedup.keepOlder(older.lastAliveAt, now)
+            val loser = if (keepOlder) newer else older
+            LinkDiag.log(
+                "duplicado del carro ${id.take(8)}: se cierra ${loser.address} (${loser.origin}, " +
+                    (if (keepOlder) "la existente está sana" else "la existente no respondió en 25 s") + ")"
+            )
+            loser.close(if (keepOlder) "duplicate" else "stale duplicate")
+            if (loser === c) return
+        }
+    }
+
+    private fun storedCarHotspot(): Pair<String, String> = try {
+        val p = getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE)
+        (p.getString(PREF_HS_SSID, null) ?: "") to (p.getString(PREF_HS_PASS, null) ?: "")
+    } catch (_: Exception) {
+        "" to ""
+    }
+
+    /** Tableta → celular `hotspot`: se guarda (claves de la UI del celular) y se registra la red. */
+    private fun onCarHotspot(ssid: String, password: String) {
+        val ctx = applicationContext
+        try {
+            miscExec.execute {
+                val (oldSsid, oldPass) = storedCarHotspot()
+                if (oldSsid == ssid && oldPass == password) {
+                    LinkDiag.log("hotspot del carro recibido ($ssid): sin cambios")
+                    return@execute
+                }
+                getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE).edit()
+                    .putString(PREF_HS_SSID, ssid)
+                    .putString(PREF_HS_PASS, password)
+                    .putBoolean(PREF_HS_AUTO, true)
+                    .apply()
+                val r = try {
+                    WifiJoin.setAutoConnect(ctx, ssid, password, true)
+                } catch (e: Exception) {
+                    mapOf("ok" to false, "error" to e.message)
+                }
+                LinkDiag.log(
+                    "hotspot del carro recibido ($ssid): registrado " +
+                        if (r["ok"] == true) "ok (${r["method"]})" else "con error: ${r["error"]}"
+                )
+                EventHub.post(
+                    mapOf(
+                        "type" to "hotspotReceived", "ssid" to ssid,
+                        "ok" to (r["ok"] == true), "error" to r["error"],
+                    )
+                )
+                if (running) worker.post { emitStatus(force = true) }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "hotspot handling rejected", e)
         }
     }
 
@@ -619,9 +759,16 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
         private val input: InputStream,
         private val output: OutputStream,
         private val closeable: Closeable,
+        /** `accept` (el carro nos marcó), `dial` (marcamos al carro) o `bt`. */
+        val origin: String = if (transport == "bt") "bt" else "accept",
     ) {
         @Volatile var device: String = address
-        @Volatile var lastRx: Long = SystemClock.elapsedRealtime()
+        val connectedAt: Long = SystemClock.elapsedRealtime()
+        @Volatile var lastRx: Long = connectedAt
+        /** Última señal de vida explícita (`hello`/`pong`), para [LinkDedup]. 0 = nunca. */
+        @Volatile var lastAliveAt: Long = 0L
+        /** `id` del `hello` del carro. */
+        @Volatile var peerId: String? = null
         @Volatile var closed = false
             private set
         private val queue = LinkedBlockingQueue<String>()
@@ -677,6 +824,7 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
             if (closed) return
             closed = true
             Log.d(TAG, "closing $transport $address: $reason")
+            LinkDiag.log("pantalla ${address} ($transport/$origin) cerrada: $reason")
             queue.clear()
             queue.offer(poison)
             try {
@@ -709,6 +857,7 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
                         try {
                             s.tcpNoDelay = true
                             s.keepAlive = true
+                            s.soTimeout = 0 // lectura bloqueante; la regla de 30 s sin datos detecta medio-abiertos
                             addClient(
                                 Client(
                                     "wifi", s.inetAddress?.hostAddress ?: "?",
@@ -783,31 +932,6 @@ class TransmitterService : Service(), MediaSessionWatcher.Listener {
                 btServer = null
             }
             if (!sleepWhileRunning(5000)) break
-        }
-    }
-
-    private fun beaconLoop() {
-        val device = Build.MODEL ?: "Android"
-        val payload = LinkProtocol.beacon(device).toByteArray(Charsets.UTF_8)
-        while (running) {
-            try {
-                DatagramSocket().use { sock ->
-                    sock.broadcast = true
-                    while (running) {
-                        for (addr in NetUtils.broadcastAddresses()) {
-                            try {
-                                sock.send(DatagramPacket(payload, payload.size, addr, LinkProtocol.BEACON_PORT))
-                            } catch (_: Exception) {
-                                // e.g. ENETUNREACH on an interface going down; ignore
-                            }
-                        }
-                        if (!sleepWhileRunning(BEACON_INTERVAL_MS)) return
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "beacon socket failed: ${e.message}")
-            }
-            if (!sleepWhileRunning(BEACON_INTERVAL_MS)) break
         }
     }
 }

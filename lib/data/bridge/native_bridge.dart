@@ -77,15 +77,19 @@ class NativeBridge {
   Map<String, dynamic> _map(Object? v) => v is Map ? Map<String, dynamic>.from(v) : <String, dynamic>{};
 
   // ---- Tableta: hotspot del carro ----
-  /// `{enabled: bool?, ssid: String?, password: String?, method: String,
-  ///   canWriteSettings: bool}`; `enabled` null = no se pudo leer.
+  /// `{enabled: bool?, ssid: String?, password: String?, configuredSsid: String?,
+  ///   configuredPassword: String?, method: String, canWriteSettings: bool}`;
+  /// `enabled` null = no se pudo leer.
   Future<Map<String, dynamic>> getHotspotState() async => _map(await _call<Map>('getHotspotState'));
 
-  /// Intenta encender/apagar el hotspot (tethering → wifiAp → localOnly).
+  /// Intenta encender/apagar el hotspot configurado en los Ajustes del equipo
+  /// (tethering → wifiAp). Solo con [allowLocalOnly] cae a LocalOnlyHotspot, que
+  /// crea una red con SSID/clave aleatorios. Si ya estaba encendido devuelve ok
+  /// sin tocar nada.
   /// `{ok: bool, method: 'tethering'|'wifiAp'|'localOnly'|'none',
-  ///   needsSettings: bool, ssid: String?, password: String?}`.
-  Future<Map<String, dynamic>> setHotspotEnabled(bool enabled) async =>
-      _map(await _call<Map>('setHotspotEnabled', {'enabled': enabled}));
+  ///   needsSettings: bool, ssid: String?, password: String?, error: String?}`.
+  Future<Map<String, dynamic>> setHotspotEnabled(bool enabled, {bool allowLocalOnly = false}) async =>
+      _map(await _call<Map>('setHotspotEnabled', {'enabled': enabled, 'allowLocalOnly': allowLocalOnly}));
   Future<void> openHotspotSettings() => _call('openHotspotSettings');
   Future<void> openWriteSettings() => _call('openWriteSettings');
 
@@ -127,4 +131,23 @@ class NativeBridge {
 
   /// `{connected: bool, ssid: String?}` (ssid puede faltar sin permiso de ubicación).
   Future<Map<String, dynamic>> getWifiStatus() async => _map(await _call<Map>('getWifiStatus'));
+
+  // ---- Diagnóstico del enlace (ambos lados) ----
+  /// `{lines: [String], networks: [{name, iface, ip, prefix, gateway, broadcast,
+  ///   hasInternet, isDefault, isWifi, isHotspot}]}`. Líneas nativas con hora (≤150).
+  Future<Map<String, dynamic>> getLinkDiagnostics() async {
+    final m = _map(await _call<Map>('getLinkDiagnostics'));
+    return {
+      'lines': ((m['lines'] as List?) ?? const []).map((e) => '$e').toList(),
+      'networks': ((m['networks'] as List?) ?? const []).map(_map).toList(),
+    };
+  }
+
+  Future<void> clearLinkDiagnostics() => _call('clearLinkDiagnostics');
+
+  /// `[{name, iface, ip, prefix, gateway, broadcast, hasInternet, isDefault, isWifi,
+  ///   isHotspot}]`: redes de ConnectivityManager + interfaces de hotspot (ap0, wlan1,
+  ///   swlan0…, `isHotspot: true`).
+  Future<List<Map<String, dynamic>>> getWifiNetworks() async =>
+      (await _call<List>('getWifiNetworks') ?? const []).map(_map).toList();
 }

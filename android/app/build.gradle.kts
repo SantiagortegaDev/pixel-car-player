@@ -70,4 +70,6 @@ flutter {
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     testImplementation("junit:junit:4.13.2")
+    // org.json real para los tests JVM (el de android.jar es un stub que lanza "Stub!").
+    testImplementation("org.json:json:20240303")
 }

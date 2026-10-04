@@ -35,7 +35,9 @@ La tableta interpola la posición con su propio reloj desde el instante en que r
 ### Descubrimiento (Wi-Fi)
 
 - El celular envía cada 2 s un **beacon UDP** al puerto **47322** (broadcast de cada interfaz IPv4
-  activa + `255.255.255.255`): `{"t":"beacon","v":1,"device":"Pixel 8","port":47321}`.
+  activa + `255.255.255.255`): `{"t":"beacon","v":1,"device":"Pixel 8","port":47321,"id":"<id>"}`.
+  Desde v2 también por un socket enlazado a cada red Wi-Fi (`Network.bindSocket`) hacia su broadcast
+  (calculado del prefijo) y su gateway (unicast).
 - La tableta intenta en paralelo: IP del beacon, IP del **gateway** Wi-Fi (caso hotspot del celular),
   IP manual guardada. Primera conexión TCP exitosa gana. Reintento con backoff (1 s → 10 s).
 - Si no llega `ping` en 25 s → se considera caída y se reconecta.
@@ -59,6 +61,8 @@ no llegan. Por eso el celular también **marca al carro** con sockets enlazados 
   enlace: si llega otro con el mismo `id` del celular mientras hay uno activo y sano, cierra el
   nuevo; si el activo no respondió en 25 s, se queda con el nuevo. El celular hace lo mismo
   por `id` del carro (una conexión por carro).
+  Implementación en el celular: "sano" = respondió `pong` (o mandó `hello`) hace ≤ 25 s; "nuevo" = el
+  que se estableció (TCP) después. Si un cliente nunca respondió, gana el nuevo.
 - Tableta → celular `{"t":"hotspot","ssid":str,"password":str}` tras `hello` (si el usuario lo
   permite, activado por defecto): el celular registra la red para unirse solo
   (`setHotspotAutoConnect`) y la guarda.
@@ -91,8 +95,8 @@ no llegan. Por eso el celular también **marca al carro** con sockets enlazados 
 | `canDrawOverlays` | — | `bool` (`true` bajo API 23) | tableta |
 | `openOverlaySettings` | — | — (abre `ACTION_MANAGE_OVERLAY_PERMISSION`; fallback a info de la app) | tableta |
 | `openBatteryOptimizationSettings` | — | — (abre `ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS`; fallback a info de la app) | tableta |
-| `getHotspotState` | — | `{enabled: bool?, ssid: String?, password: String?, method, canWriteSettings: bool}` — `enabled` null = no se pudo leer; `method`: `localOnly` (reserva propia activa) \| `tethering` \| `wifiAp` (lo encendimos nosotros) \| `system` (encendido por otro) \| `none` (apagado) \| `unknown`. ssid/password null si Android no deja leerlos | tableta |
-| `setHotspotEnabled` | `{enabled: bool}` | `{ok, method: 'tethering'\|'wifiAp'\|'localOnly'\|'none', needsSettings: bool, ssid?, password?, error: String?}` — orden: tethering → `setWifiApEnabled` → LocalOnlyHotspot (pide ubicación / `NEARBY_WIFI_DEVICES`); confirma sondeando el estado ≤ 3 s. `ok:true, method:'none'` = ya estaba como se pidió. `error` (código): `systemPathsFailed`, `permissionDenied`, `locationOff`, `noChannel`, `incompatibleMode`, `tetheringDisallowed`, `timeout`, `generic`, `unsupported` | tableta |
+| `getHotspotState` | — | `{enabled: bool?, ssid: String?, password: String?, configuredSsid: String?, configuredPassword: String?, method, canWriteSettings: bool}` — `ssid`/`password` = red activa (la de LocalOnly si hay reserva, si no la configurada); `configuredSsid`/`configuredPassword` = hotspot configurado en Ajustes del equipo (getSoftApConfiguration → getWifiApConfiguration → `WifiConfigStoreSoftAp.xml` / `softap.conf` si son legibles; null si no). `enabled` null = no se pudo leer; `method`: `localOnly` (reserva propia activa) \| `tethering` \| `wifiAp` (lo encendimos nosotros) \| `system` (encendido por otro) \| `none` (apagado) \| `unknown`. ssid/password null si Android no deja leerlos | tableta |
+| `setHotspotEnabled` | `{enabled: bool, allowLocalOnly: bool = false}` | `{ok, method: 'tethering'\|'wifiAp'\|'localOnly'\|'none', needsSettings: bool, ssid?, password?, error: String?}` — usa el hotspot **configurado en el equipo**: si ya está encendido (o encendiéndose) devuelve `ok:true` sin tocar nada; si no, tethering → `setWifiApEnabled`; confirma sondeando el estado ≤ 3 s. **Solo con `allowLocalOnly:true`** cae a LocalOnlyHotspot (red con SSID/clave aleatorios; pide ubicación / `NEARBY_WIFI_DEVICES`). `ok:true, method:'none'` = ya estaba como se pidió. `error` (código): `systemPathsFailed`, `permissionDenied`, `locationOff`, `noChannel`, `incompatibleMode`, `tetheringDisallowed`, `timeout`, `generic`, `unsupported` | tableta |
 | `openHotspotSettings` | — | — (TetherSettings → `Settings$TetherSettingsActivity` → `Settings$WifiTetherSettingsActivity` → `android.settings.TETHER_SETTINGS` → Conexiones inalámbricas → Ajustes) | tableta |
 | `openWriteSettings` | — | — (`ACTION_MANAGE_WRITE_SETTINGS` de esta app; habilita la vía tethering en Android 7–10) | tableta |
 | `getNeighborIps` | — | `List<String>` IPv4 de `/proc/net/arp` (flags 0x2, MAC ≠ 0) + `ip neigh` (REACHABLE/STALE/DELAY/PROBE). Vacío si Android lo bloquea (10+ / 11+) | tableta |
@@ -105,6 +109,9 @@ no llegan. Por eso el celular también **marca al carro** con sockets enlazados 
 | `consumeBootLaunch` | — | `bool` (true una sola vez si la abrió `BootReceiver`, que ya lanzó la app acompañante) | tableta |
 | `setHotspotAutoConnect` | `{ssid, password, enabled}` (`password` vacío = red abierta; si no, 8–63 caracteres) | `{ok, method: 'suggestion'\|'legacy'\|'none', error: String?}` — API 29+ `WifiNetworkSuggestion` (reemplaza la del mismo SSID; `enabled:false` la quita); < 29 `WifiConfiguration` guardada. `error` es un texto en español apto para mostrar, con el código entre paréntesis (p. ej. `(appDisallowed)`) | celular |
 | `getWifiStatus` | — | `{connected: bool, ssid: String?}` (ssid null sin permiso/servicio de ubicación) | celular |
+| `getLinkDiagnostics` | — | `{lines: [String], networks: [red]}` — `lines`: registro nativo circular (≤ 150, `HH:mm:ss.SSS mensaje`): celular = beacons enviados (resumen por red cada 60 s), marcados al carro y su resultado (clase de error), `car_beacon` recibidos, pantallas aceptadas/cerradas/duplicadas, cambios de red, hotspot recibido; tableta = intentos de hotspot, multicast lock. `networks` = mismo formato que `getWifiNetworks`. El Dart de cada lado agrega su propio registro | ambos |
+| `clearLinkDiagnostics` | — | — (vacía el registro nativo) | ambos |
+| `getWifiNetworks` | — | `[{name, iface, ip, prefix, gateway, broadcast, hasInternet, isDefault, isWifi, isHotspot}]` — redes de ConnectivityManager + LinkProperties (`hasInternet` = INTERNET y VALIDATED; `isDefault` = red activa) más interfaces de hotspot sin objeto Network (`ap*`, `wlan1`, `swlan*`, `softap*`: `isHotspot: true`, `gateway` null) | ambos |
 
 **Inicio automático**: `BootReceiver` (exportado, `RECEIVE_BOOT_COMPLETED`) escucha `BOOT_COMPLETED`,
 `LOCKED_BOOT_COMPLETED`, `QUICKBOOT_POWERON`, `MY_PACKAGE_REPLACED` y broadcasts "ACC on" de head units
@@ -122,14 +129,20 @@ la nuestra quede al frente. Solo ocurre si el inicio automático está activo (m
 local cuando la app que lo pidió deja de estar en primer plano.
 
 Claves de `FlutterSharedPreferences` leídas en nativo (prefijo `flutter.`): `app_mode`, `car_autostart`,
-`car_autostart_delay`, `car_companion_package`, `car_companion_delay`. El resto (SSID/clave del hotspot,
-auto-conexión del celular…) solo lo guarda Dart.
+`car_autostart_delay`, `car_companion_package`, `car_companion_delay`; en el celular `phone_car_ip` (String,
+IP manual del carro para el marcador v2; vacío/ inválido = no se usa).
+**Escritas en nativo** (celular, al recibir `hotspot` de la tableta, solo si SSID o clave cambiaron):
+`phone_car_hotspot_ssid`, `phone_car_hotspot_password` (String) y `phone_car_hotspot_autoconnect = true`
+(Boolean); además se llama a la lógica de `setHotspotAutoConnect`. Como `SharedPreferences` de Dart cachea en
+memoria, la UI debe hacer `reload()` al recibir el evento `hotspotReceived`.
+Identificador de instalación (`id` de `hello`/`beacon`): `SharedPreferences("pcp_native")["install_id"]` (UUID).
 
 `EventChannel("pcp/events")` — un único stream de `Map` con campo `type`:
 
 | `type` | Campos |
 |--------|--------|
-| `transmitterStatus` | `running` (bool), `port`, `ips: [String]`, `clients: [{device, transport: "wifi"\|"bt", address}]`, `session: {package, title, artist, playing}?`, `lyricsStatus` |
+| `transmitterStatus` | `running` (bool), `port`, `ips: [String]`, `clients: [{device, transport: "wifi"\|"bt", address, origin: "accept"\|"dial"\|"bt", id: String?}]` (`origin` dial = el celular marcó al carro; `id` = id del `hello` del carro), `session: {package, title, artist, playing}?`, `lyricsStatus`, `carHotspotSsid: String?` (guardado) |
+| `hotspotReceived` | `ssid`, `ok` (bool, se registró la red), `error: String?` — el celular recibió `hotspot` de la tableta con datos nuevos y ya los guardó |
 | `rfcomm` | `event`: `connected` (`name`, `address`) \| `line` (`data`: String JSON) \| `disconnected` (`reason`) |
 | `localMedia` | `package`, `title`, `artist`, `album`, `durationMs`, `playing`, `positionMs`, `art` (`Uint8List?` PNG/JPEG) |
 | `fft` | `bands: List<double>` (64, graves → agudos, log-espaciadas 30 Hz–16 kHz, 0..1 con auto-ganancia lenta y suavizado de caída), `rms: double` (0..1, auto-ganancia). ≤ 30 fps; la mayoría de los equipos captura a 20 Hz como máximo |

@@ -103,10 +103,14 @@ object Hotspot {
         else -> false
     }
 
-    /** `{enabled, ssid, password, method, canWriteSettings}` (see CONTRACT §2). */
+    /**
+     * `{enabled, ssid, password, configuredSsid, configuredPassword, method, canWriteSettings}`
+     * (see CONTRACT §2). ssid/password = red activa (LocalOnly si hay reserva, si no la configurada).
+     */
     fun state(ctx: Context): Map<String, Any?> {
         val enabled = isEnabled(ctx)
-        val creds = credentials(ctx)
+        val configured = configuredCredentials(ctx)
+        val creds = reservationCreds() ?: configured
         val method = when {
             reservation != null -> "localOnly"
             enabled == true -> lastMethod ?: "system"
@@ -117,36 +121,62 @@ object Hotspot {
             "enabled" to enabled,
             "ssid" to creds.ssid,
             "password" to creds.password,
+            "configuredSsid" to configured.ssid,
+            "configuredPassword" to configured.password,
             "method" to method,
             "canWriteSettings" to canWriteSettings(ctx),
         )
     }
 
     /** SSID/password of the active LocalOnlyHotspot, else of the configured system soft AP. */
-    @SuppressLint("NewApi")
-    fun credentials(ctx: Context): Creds {
-        reservationCreds()?.let { return it }
-        val wm = wifi(ctx) ?: return Creds(null, null)
-        HiddenApi.exempt()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                val conf = WifiManager::class.java.getMethod("getSoftApConfiguration").invoke(wm)
-                if (conf != null) return softApCreds(conf)
-            } catch (e: Throwable) {
-                Log.d(TAG, "getSoftApConfiguration denied: ${rootMessage(e)}")
+    fun credentials(ctx: Context): Creds = reservationCreds() ?: configuredCredentials(ctx)
+
+    private val SOFTAP_XML = listOf(
+        "/data/misc/apexdata/com.android.wifi/WifiConfigStoreSoftAp.xml",
+        "/data/misc/wifi/WifiConfigStoreSoftAp.xml",
+    )
+    private const val SOFTAP_CONF = "/data/misc/wifi/softap.conf"
+
+    /**
+     * SSID/clave del hotspot configurado en los Ajustes del equipo (el que usan tethering y
+     * setWifiApEnabled; LocalOnly en cambio inventa una red). Fuentes en orden, completando los
+     * campos que falten: getSoftApConfiguration → getWifiApConfiguration → archivos del sistema
+     * (casi nunca legibles sin root; los errores se ignoran).
+     */
+    fun configuredCredentials(ctx: Context): Creds {
+        var ssid: String? = null
+        var pass: String? = null
+        fun take(c: Creds?) {
+            if (c == null) return
+            if (ssid == null) ssid = c.ssid
+            if (pass == null && c.ssid != null && (ssid == null || c.ssid == ssid)) pass = c.password
+        }
+        val wm = wifi(ctx)
+        if (wm != null) {
+            HiddenApi.exempt()
+            take(runCatching {
+                WifiManager::class.java.getMethod("getSoftApConfiguration").invoke(wm)?.let { softApCreds(it) }
+            }.onFailure { Log.d(TAG, "getSoftApConfiguration denied: ${rootMessage(it)}") }.getOrNull())
+            if (ssid == null || pass == null) {
+                take(runCatching {
+                    @Suppress("DEPRECATION")
+                    (WifiManager::class.java.getMethod("getWifiApConfiguration").invoke(wm) as? WifiConfiguration)
+                        ?.let {
+                            @Suppress("DEPRECATION")
+                            Creds(unquote(it.SSID), unquote(it.preSharedKey))
+                        }
+                }.onFailure { Log.d(TAG, "getWifiApConfiguration denied: ${rootMessage(it)}") }.getOrNull())
             }
         }
-        try {
-            @Suppress("DEPRECATION")
-            val conf = WifiManager::class.java.getMethod("getWifiApConfiguration").invoke(wm) as? WifiConfiguration
-            if (conf != null) {
-                @Suppress("DEPRECATION")
-                return Creds(unquote(conf.SSID), unquote(conf.preSharedKey))
+        if (ssid == null || pass == null) {
+            for (path in SOFTAP_XML) {
+                take(runCatching { parseSoftApXml(java.io.File(path).readText()) }.getOrNull())
             }
-        } catch (e: Throwable) {
-            Log.d(TAG, "getWifiApConfiguration denied: ${rootMessage(e)}")
         }
-        return Creds(null, null)
+        if (ssid == null || pass == null) {
+            take(runCatching { parseSoftApConf(java.io.File(SOFTAP_CONF).readBytes()) }.getOrNull())
+        }
+        return Creds(ssid, pass)
     }
 
     /** SoftApConfiguration read reflectively (getSsid deprecated in 33, getWifiSsid hidden before). */
@@ -154,8 +184,55 @@ object Hotspot {
         val cls = conf.javaClass
         val ssid = runCatching { cls.getMethod("getSsid").invoke(conf) as? String }.getOrNull()
             ?: runCatching { cls.getMethod("getWifiSsid").invoke(conf)?.toString() }.getOrNull()
+                ?.let { decodeWifiSsid(it) }
         val pass = runCatching { cls.getMethod("getPassphrase").invoke(conf) as? String }.getOrNull()
         return Creds(unquote(ssid), unquote(pass))
+    }
+
+    /** `WifiSsid.toString()`: `"texto"` entre comillas, o hex si no es UTF-8. */
+    fun decodeWifiSsid(s: String): String? {
+        val t = s.trim()
+        if (t.isEmpty()) return null
+        if (t.length >= 2 && t.startsWith("\"") && t.endsWith("\"")) return unquote(t)
+        if (t.length % 2 == 0 && t.matches(Regex("[0-9a-fA-F]+"))) {
+            return runCatching {
+                String(ByteArray(t.length / 2) { t.substring(it * 2, it * 2 + 2).toInt(16).toByte() }, Charsets.UTF_8)
+            }.getOrNull()?.ifEmpty { null }
+        }
+        return t
+    }
+
+    /** `WifiConfigStoreSoftAp.xml` (Android 11+): `<string name="SSID">` / `WifiSsid` y `Passphrase`. */
+    fun parseSoftApXml(xml: String): Creds {
+        fun str(name: String): String? =
+            Regex("""<string\s+name="$name"\s*>([^<]*)</string>""").find(xml)?.groupValues?.get(1)?.let(::xmlUnescape)
+        val ssid = str("WifiSsid")?.let { decodeWifiSsid(it) } ?: str("SSID")?.let { unquote(it) }
+        return Creds(ssid, unquote(str("Passphrase")))
+    }
+
+    private fun xmlUnescape(s: String) = s.replace("&quot;", "\"").replace("&apos;", "'")
+        .replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+
+    /**
+     * `softap.conf` (WifiApConfigStore, Android 7–10): int versión, UTF ssid, [v≥2: int banda,
+     * int canal], [v≥3: boolean oculto], int authType, [authType≠0: UTF clave].
+     */
+    fun parseSoftApConf(bytes: ByteArray): Creds? = try {
+        java.io.DataInputStream(bytes.inputStream()).use { inp ->
+            val version = inp.readInt()
+            if (version !in 1..3) return null
+            val ssid = inp.readUTF()
+            if (version >= 2) {
+                inp.readInt()
+                inp.readInt()
+            }
+            if (version >= 3) inp.readBoolean()
+            val auth = inp.readInt()
+            val pass = if (auth != 0) inp.readUTF() else null
+            Creds(unquote(ssid), unquote(pass))
+        }
+    } catch (_: Exception) {
+        null
     }
 
     @SuppressLint("NewApi")
@@ -200,11 +277,22 @@ object Hotspot {
      * the caller may still try LocalOnlyHotspot, `method == "none"` and `ok == false`.
      */
     fun setEnabled(ctx: Context, enabled: Boolean): Map<String, Any?> {
+        val r = setEnabledInner(ctx, enabled)
+        LinkDiag.log(
+            "hotspot ${if (enabled) "encender" else "apagar"} → ok=${r["ok"]} método=${r["method"]}" +
+                (r["error"]?.let { " error=$it" } ?: "") + (r["ssid"]?.let { " ssid=$it" } ?: "")
+        )
+        return r
+    }
+
+    private fun setEnabledInner(ctx: Context, enabled: Boolean): Map<String, Any?> {
         HiddenApi.exempt()
         if (!enabled) return disable(ctx)
 
         reservationCreds()?.let { return result(true, "localOnly", creds = it) }
-        if (apState(ctx) == AP_ENABLED) {
+        // Ya encendido (por nosotros, por el sistema o por el usuario): no se toca nada.
+        val st = apState(ctx)
+        if (st == AP_ENABLED || st == AP_ENABLING) {
             return result(true, lastMethod ?: "none", creds = credentials(ctx))
         }
 
@@ -214,8 +302,9 @@ object Hotspot {
             "tetheringManager" to { tetherViaTetheringManager(ctx, true) },
         )
         for ((name, attempt) in tetherAttempts) {
-            val accepted = guarded("tethering/$name") { attempt() } ?: continue
-            if (!accepted) continue
+            val accepted = guarded("tethering/$name") { attempt() }
+            LinkDiag.log("hotspot tethering/$name → ${accepted ?: "no disponible"}")
+            if (accepted != true) continue
             if (confirm(ctx, true) != false) {
                 lastMethod = "tethering"
                 return result(true, "tethering", creds = credentials(ctx))
@@ -224,6 +313,7 @@ object Hotspot {
 
         val wifiWasOn = wifi(ctx)?.isWifiEnabled == true
         val apAccepted = guarded("wifiAp") { viaWifiAp(ctx, true) }
+        LinkDiag.log("hotspot setWifiApEnabled → ${apAccepted ?: "no disponible"}")
         if (apAccepted == true && confirm(ctx, true) != false) {
             lastMethod = "wifiAp"
             return result(true, "wifiAp", creds = credentials(ctx))
@@ -439,6 +529,15 @@ object Hotspot {
      */
     @SuppressLint("MissingPermission")
     fun startLocalOnly(ctx: Context, permissionsGranted: Boolean): Map<String, Any?> {
+        val r = startLocalOnlyInner(ctx, permissionsGranted)
+        LinkDiag.log(
+            "hotspot LocalOnly (red aleatoria) → ok=${r["ok"]}" + (r["error"]?.let { " error=$it" } ?: "") +
+                (r["ssid"]?.let { " ssid=$it" } ?: "")
+        )
+        return r
+    }
+
+    private fun startLocalOnlyInner(ctx: Context, permissionsGranted: Boolean): Map<String, Any?> {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             return result(false, "none", needsSettings = true, error = "unsupported")
         }
