@@ -16,6 +16,19 @@ import 'package:pixel_car_player/data/link/car_link_client.dart';
 import 'package:pixel_car_player/data/link/link_prefs.dart';
 import 'package:pixel_car_player/data/link/link_protocol.dart';
 
+/// Qué mueve las barras del visualizador ahora mismo (Configuración → Portada y visualizador).
+enum CarVizNow {
+  /// Audio real con señal.
+  real,
+
+  /// Se pidió audio real pero no llega señal (el radio no pasa el audio por Android, sin
+  /// permiso o sin cuadros); con "Automático" se usa el simulado.
+  realNoSignal,
+
+  /// Espectro simulado (elegido).
+  simulated,
+}
+
 /// De dónde vienen los datos que se muestran.
 enum CarSource {
   /// Nada que mostrar (pantalla de espera).
@@ -72,6 +85,8 @@ class CarController extends ChangeNotifier {
     _lastConnection = conn;
     _lastViz = this.custom.value.visualizer;
     _lastHotspot = this.custom.value.hotspot;
+    this.hotspot.allowTemporary = this.custom.value.hotspot.allowTemporary;
+    this.audio.fastGain = _lastViz.response == CarVizResponse.precise;
     this.custom.addListener(_onCustom);
     this.audio.detected.addListener(_changed);
   }
@@ -136,6 +151,10 @@ class CarController extends ChangeNotifier {
 
   DemoSource? _demo;
   StreamSubscription<LinkMessage>? _msgSub;
+  StreamSubscription<LinkMessage>? _helloSub;
+
+  /// Última red enviada al celular en este enlace (para no repetirla).
+  String? _sharedHotspot;
   StreamSubscription<LinkMessage>? _demoSub;
   StreamSubscription<Map<String, dynamic>>? _nativeSub;
   Timer? _ticker;
@@ -216,6 +235,13 @@ class CarController extends ChangeNotifier {
     CarVizSource.auto => audio.detected.value,
   };
 
+  /// Fuente activa de las barras ahora.
+  CarVizNow get vizNow {
+    final v = cfg.visualizer;
+    if (v.source == CarVizSource.simulated) return CarVizNow.simulated;
+    return audio.detected.value && audio.live ? CarVizNow.real : CarVizNow.realNoSignal;
+  }
+
   /// ¿Animar el visualizador, el giro de la portada y las formas de fondo? Suena según el
   /// celular / la sesión local, o se detectó audio real, o "Animar siempre".
   bool get visualActive {
@@ -241,6 +267,10 @@ class CarController extends ChangeNotifier {
       unawaited(_bridge.startLocalMediaWatch());
     }
     _msgSub ??= link.messages.listen(apply);
+    _helloSub ??= link.messages.where((m) => m is HelloMessage).listen((_) {
+      _sharedHotspot = null;
+      unawaited(shareHotspot());
+    });
     // Cosas del sistema que no deben esperar a la conexión.
     unawaited(syncVisualizer());
     _syncHotspot(initial: true);
@@ -311,6 +341,37 @@ class CarController extends ChangeNotifier {
     }
   }
 
+  /// Red del carro que se manda al celular: la escrita en Configuración → Hotspot o, si
+  /// no hay, la configurada en el radio (`configuredSsid`/`configuredPassword`).
+  (String, String)? get hotspotNetwork {
+    final h = cfg.hotspot;
+    if (h.ssid.trim().isNotEmpty) return (h.ssid.trim(), h.password);
+    final info = hotspot.info;
+    final ssid = info.networkSsid;
+    if (ssid == null || ssid.isEmpty) return null;
+    return (ssid, info.networkPassword ?? '');
+  }
+
+  /// Tras el `hello` del celular: le pasa la red del carro (si el usuario lo permite) para
+  /// que se una solo (`{"t":"hotspot"}`, CONTRACT.md §1 v2). `true` si se envió.
+  Future<bool> shareHotspot({bool force = false}) async {
+    if (demo || !cfg.hotspot.shareWithPhone || !link.status.value.isConnected) return false;
+    var net = hotspotNetwork;
+    if (net == null && _bridge.isSupported) {
+      await hotspot.refresh();
+      net = hotspotNetwork;
+    }
+    if (net == null) return false;
+    final key = '${net.$1}\u0000${net.$2}';
+    if (!force && key == _sharedHotspot) return false;
+    final ok = await link.send(LinkProtocol.hotspot(ssid: net.$1, password: net.$2));
+    if (ok) {
+      _sharedHotspot = key;
+      link.diag.note('Red del carro «${net.$1}» enviada al celular');
+    }
+    return ok;
+  }
+
   // ---- App acompañante ----
 
   /// Al arrancar (una vez): abre la app acompañante detrás.
@@ -371,7 +432,14 @@ class CarController extends ChangeNotifier {
       unawaited(syncVisualizer());
     }
     _lastViz = viz;
+    audio.fastGain = viz.response == CarVizResponse.precise;
     final hs = cfg.hotspot;
+    hotspot.allowTemporary = hs.allowTemporary;
+    if (hs.ssid != _lastHotspot.ssid ||
+        hs.password != _lastHotspot.password ||
+        (hs.shareWithPhone && !_lastHotspot.shareWithPhone)) {
+      unawaited(shareHotspot());
+    }
     if (hs.autoEnable != _lastHotspot.autoEnable || hs.recheckMinutes != _lastHotspot.recheckMinutes) {
       _syncHotspot();
     }
@@ -513,7 +581,7 @@ class CarController extends ChangeNotifier {
       case QueueMessage(:final items):
         if (listEquals(items, _queue)) return;
         _queue = List.unmodifiable(items);
-      case PingMessage() || BeaconMessage() || UnknownMessage():
+      case PingMessage() || BeaconMessage() || CarBeaconMessage() || UnknownMessage():
         return;
     }
     _changed();
@@ -705,6 +773,7 @@ class CarController extends ChangeNotifier {
     _ticker?.cancel();
     _ipTimer?.cancel();
     _msgSub?.cancel();
+    _helloSub?.cancel();
     _nativeSub?.cancel();
     link.status.removeListener(_onLinkStatus);
     _stopDemo();

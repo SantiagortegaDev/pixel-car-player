@@ -17,7 +17,7 @@ import 'package:provider/provider.dart';
 ///
 /// En web (capturas) se aceptan:
 ///  - `?lyrics=1`: abre directo la letra en pantalla completa.
-///  - `?settings=<id>`: abre Configuración en esa categoría (`conexion`, `hotspot`,
+///  - `?settings=<id>`: abre Configuración en esa categoría (`conexion`, `diagnostico`, `hotspot`,
 ///    `inicio`, `diseno`, `portada`, `visibles`, `textos`, `letra`, `avanzado`).
 ///  - `?custom=<json>` (codificado para URL, o en base64url): personalización inicial
 ///    (no se guarda).

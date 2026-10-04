@@ -246,6 +246,32 @@ void main() {
       h.dispose();
     });
 
+    test('solo enciende si está apagado; nunca con estado desconocido; sin red temporal', () async {
+      final api = _FakeHotspotApi({'enabled': null, 'canWriteSettings': true});
+      final h = CarHotspot(api: api);
+      expect(await h.ensureOn(), isFalse);
+      expect(api.setCalls, isEmpty, reason: 'estado desconocido: no se toca');
+      expect(h.prompt.value, isNull);
+
+      api.state = {'enabled': false, 'configuredSsid': 'Corolla', 'configuredPassword': 'carro2026'};
+      api.onSet = (on) => {'ok': true, 'method': 'tethering'};
+      expect(await h.ensureOn(), isTrue);
+      expect(api.setCalls, [true]);
+      expect(api.localOnlyCalls, [false], reason: 'sin el ajuste avanzado no se usa LocalOnlyHotspot');
+      expect(h.info.networkSsid, 'Corolla');
+      expect(h.info.networkPassword, 'carro2026');
+
+      h.allowTemporary = true;
+      api.state = {'enabled': false};
+      await h.ensureOn();
+      expect(api.localOnlyCalls.last, isTrue);
+
+      api.state = {'enabled': true};
+      await h.ensureOn();
+      expect(api.setCalls.length, 2, reason: 'ya encendido: no se vuelve a pedir');
+      h.dispose();
+    });
+
     test('sin sistema no hace nada', () async {
       final api = _FakeHotspotApi({}, supported: false);
       final h = CarHotspot(api: api);
@@ -541,14 +567,16 @@ class _FakeHotspotApi implements HotspotApi {
   @override
   final bool supported;
   final setCalls = <bool>[];
+  final localOnlyCalls = <bool>[];
   Map<String, dynamic> Function(bool on) onSet = (_) => {'ok': true, 'method': 'none'};
 
   @override
   Future<Map<String, dynamic>> getState() async => state;
 
   @override
-  Future<Map<String, dynamic>> setEnabled(bool enabled) async {
+  Future<Map<String, dynamic>> setEnabled(bool enabled, {bool allowLocalOnly = false}) async {
     setCalls.add(enabled);
+    localOnlyCalls.add(allowLocalOnly);
     return onSet(enabled);
   }
 }

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:pixel_car_player/core/models/now_playing.dart';
+import 'package:pixel_car_player/data/link/link_diagnostics.dart';
 import 'package:pixel_car_player/data/link/link_protocol.dart';
 
 /// Pista de demostración (canciones inventadas, letras originales).
@@ -304,3 +305,30 @@ const demoLaunchableApps = <Map<String, dynamic>>[
   {'package': 'com.google.android.youtube', 'label': 'YouTube'},
   {'package': 'com.google.android.apps.youtube.music', 'label': 'YouTube Music'},
 ];
+
+/// Diagnóstico de ejemplo (web `?diag=sample`): hotspot del carro encendido, el celular
+/// avisa por Wi-Fi pero los intentos de la tableta fallan, y luego el celular marca.
+void fillDemoDiagnostics(LinkDiagnostics d) {
+  final now = DateTime.now();
+  d
+    ..setNetworks(const [
+      LinkNetwork(iface: 'ap0', ip: '192.168.43.1', prefix: 24, isHotspot: true),
+      LinkNetwork(iface: 'wlan0', ip: '10.0.0.23', prefix: 24, gateway: '10.0.0.1', isWifi: true),
+    ])
+    ..listeningPort = LinkProtocol.carTcpPort
+    ..note('Escuchando conexiones del celular en el puerto ${LinkProtocol.carTcpPort}')
+    ..heard('192.168.43.118', device: 'Pixel 8', port: LinkProtocol.tcpPort, id: '3f9c1a07b2d4e815');
+  for (var i = 0; i < 4; i++) {
+    d.sentBeacon();
+  }
+  for (final (s, target, err, ms) in [
+    (14, '192.168.43.118:47321', 'sin respuesta (tiempo agotado)', 3002),
+    (9, '192.168.43.118:47321', 'rechazada (no hay app escuchando)', 41),
+    (4, '10.0.0.1:47321', 'rechazada (no hay app escuchando)', 18),
+  ]) {
+    d.attempt(
+      LinkAttempt(at: now.subtract(Duration(seconds: s)), target: target, transport: 'wifi', ok: false, error: err, ms: ms),
+    );
+  }
+  d.note('Cambiaron las redes: 10.0.0.23,192.168.43.1');
+}

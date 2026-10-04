@@ -4,21 +4,29 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:pixel_car_player/data/bridge/native_bridge.dart';
 
+import 'link_diagnostics.dart';
+import 'link_prefs.dart';
 import 'link_protocol.dart';
 import 'link_transport.dart';
+
+export 'link_diagnostics.dart';
 
 enum LinkPhase { disconnected, searching, connected }
 
 /// Estado de la conexión con el celular.
 @immutable
 class LinkStatus {
-  const LinkStatus._(this.phase, {this.device, this.transport, this.address});
+  const LinkStatus._(this.phase, {this.device, this.transport, this.address, this.inbound = false});
 
   static const disconnected = LinkStatus._(LinkPhase.disconnected);
   static const searching = LinkStatus._(LinkPhase.searching);
 
-  const LinkStatus.connected({required String device, required String transport, required String address})
-    : this._(LinkPhase.connected, device: device, transport: transport, address: address);
+  const LinkStatus.connected({
+    required String device,
+    required String transport,
+    required String address,
+    bool inbound = false,
+  }) : this._(LinkPhase.connected, device: device, transport: transport, address: address, inbound: inbound);
 
   final LinkPhase phase;
 
@@ -31,10 +39,14 @@ class LinkStatus {
   /// IP o MAC del celular.
   final String? address;
 
+  /// La conexión la inició el celular (v2).
+  final bool inbound;
+
   bool get isConnected => phase == LinkPhase.connected;
 
-  LinkStatus withDevice(String d) =>
-      isConnected ? LinkStatus.connected(device: d, transport: transport!, address: address!) : this;
+  LinkStatus withDevice(String d) => isConnected
+      ? LinkStatus.connected(device: d, transport: transport!, address: address!, inbound: inbound)
+      : this;
 
   @override
   bool operator ==(Object other) =>
@@ -42,14 +54,47 @@ class LinkStatus {
       other.phase == phase &&
       other.device == device &&
       other.transport == transport &&
-      other.address == address;
+      other.address == address &&
+      other.inbound == inbound;
 
   @override
-  int get hashCode => Object.hash(phase, device, transport, address);
+  int get hashCode => Object.hash(phase, device, transport, address, inbound);
 
   @override
-  String toString() => 'LinkStatus($phase, $device, $transport, $address)';
+  String toString() => 'LinkStatus($phase, $device, $transport, $address${inbound ? ', entrante' : ''})';
 }
+
+/// Qué hacer con una conexión nueva cuando ya hay (o no) un enlace (CONTRACT.md §1 v2).
+enum LinkDecision {
+  /// No hay enlace: se usa la nueva.
+  adopt,
+
+  /// El enlace actual está sano: se queda; la nueva se descarta.
+  keepCurrent,
+
+  /// El actual está caído (sin datos en 25 s) o es Bluetooth y llega Wi-Fi del mismo
+  /// celular: se cambia a la nueva.
+  replace,
+}
+
+/// Lo que se sabe de un extremo para decidir.
+@immutable
+class LinkPeerInfo {
+  const LinkPeerInfo({this.id, this.transport = 'wifi', required this.lastRx, this.answered = true});
+  final String? id;
+  final String transport;
+  final DateTime lastRx;
+
+  /// Ya mandó su `hello` (respondió). Uno que nunca respondió pierde con el nuevo.
+  final bool answered;
+}
+
+/// Intento de conexión saliente inyectable (pruebas). `onError` recibe un texto corto.
+typedef LinkConnector =
+    Future<LinkConnection?> Function(String host, int port, Duration timeout, void Function(String error) onError);
+
+Future<LinkConnection?> _tcpConnector(String host, int port, Duration timeout, void Function(String) onError) =>
+    connectTcp(host, port, timeout: timeout, onError: onError);
 
 class _Beacon {
   _Beacon(this.port, this.device, this.at);
@@ -58,14 +103,104 @@ class _Beacon {
   final DateTime at;
 }
 
-/// Gestor de conexión de la tableta con el celular.
+/// Un extremo conectado: se suscribe a las líneas apenas se crea (las guarda hasta que
+/// alguien las lea), anota la hora de lo último recibido y detecta el `hello` del celular.
+class _Peer {
+  _Peer(this.conn, {required this.inbound}) : lastRx = DateTime.now() {
+    _sub = conn.lines.listen(
+      (l) {
+        lastRx = DateTime.now();
+        if (!_hello.isCompleted) {
+          final m = LinkProtocol.decodeLine(l);
+          if (m is HelloMessage) {
+            id = m.id;
+            device = m.device;
+            _hello.complete();
+          }
+        }
+        if (!_buf.isClosed) _buf.add(l);
+      },
+      onDone: _finish,
+      onError: (_) => _finish(),
+      cancelOnError: true,
+    );
+  }
+
+  final LinkConnection conn;
+  final bool inbound;
+  DateTime lastRx;
+  String? id;
+  String? device;
+  final _buf = StreamController<String>();
+  final _hello = Completer<void>();
+  final _closed = Completer<void>();
+  late final StreamSubscription<String> _sub;
+
+  Stream<String> get lines => _buf.stream;
+  bool get isClosed => _closed.isCompleted;
+  Future<void> get closed => _closed.future;
+  String get transport => conn.transport;
+  String get address => conn.remoteAddress;
+
+  LinkPeerInfo get info =>
+      LinkPeerInfo(id: id, transport: transport, lastRx: lastRx, answered: _hello.isCompleted);
+
+  void _finish() {
+    if (!_closed.isCompleted) _closed.complete();
+    if (!_buf.isClosed) _buf.close();
+  }
+
+  /// Espera el `hello` (o que se cierre, o [max]).
+  Future<void> waitHello(Duration max) =>
+      Future.any([_hello.future, _closed.future, Future<void>.delayed(max)]);
+
+  Future<void> close() async {
+    _finish();
+    await _sub.cancel();
+    await conn.close();
+  }
+}
+
+class _Session {
+  _Session(this.peer);
+  final _Peer peer;
+  final done = Completer<void>();
+  bool replaced = false;
+}
+
+/// Una carrera de intentos salientes. Se le pueden sumar destinos mientras corre.
+class _Race {
+  final _done = Completer<void>();
+  final Set<String> tried = {};
+  int pending = 0;
+
+  /// Solo queda el intento Bluetooth (sin destinos Wi-Fi): se lo espera.
+  bool waitBt = false;
+
+  bool get isDone => _done.isCompleted;
+  Future<void> get done => _done.future;
+
+  void finish() {
+    if (!_done.isCompleted) _done.complete();
+  }
+}
+
+/// Gestor de conexión de la tableta con el celular (enlace bidireccional, CONTRACT.md §1 v2).
 ///
-/// Wi-Fi: en paralelo intenta la IP de cada beacon UDP reciente, la IP del
-/// gateway (hotspot del celular) y la IP manual. La primera conexión TCP
-/// gana. Bluetooth: si hay un celular emparejado elegido, también compite
-/// una conexión RFCOMM por el canal nativo.
+/// - **Marca**: en paralelo a la IP de cada beacon UDP reciente del celular, al gateway
+///   (hotspot del celular), a la IP manual y a los vecinos ARP (hotspot de la tableta). Un
+///   beacon nuevo durante la carrera suma su intento al instante. Bluetooth (RFCOMM) corre
+///   aparte, en segundo plano: nunca frena la carrera Wi-Fi.
+/// - **Escucha** TCP [listenPort] (47323): el celular marca a la tableta, así el orden en que
+///   se abren las apps no importa. Las conexiones entrantes se tratan igual que las salientes.
+/// - **Avisa** cada 2 s con un `car_beacon` UDP (puerto 47324) a `255.255.255.255` y al
+///   broadcast de cada red.
+/// - **Un solo enlace**: si llega otra conexión con uno sano, se queda el actual (la otra se
+///   guarda unos segundos de reserva por si el celular eligió esa); si el actual no recibió
+///   nada en [watchdog], se cambia. Ver [decide].
+/// - Si cambian las redes (cada 5 s sin enlace) se vuelve a intentar de inmediato.
 ///
-/// Tras conectar envía `hello` + `resync`, contesta `pong` a `ping` y
+/// Tras conectar envía `hello` (con [installId]) + `resync`, contesta `pong` a `ping` y
 /// considera caída la conexión si no recibe nada en 25 s.
 class CarLinkClient {
   CarLinkClient({
@@ -76,9 +211,29 @@ class CarLinkClient {
     this.watchdog = const Duration(seconds: 25),
     this.useWifi = true,
     this.maxBackoff = const Duration(seconds: 10),
-  }) : _bridge = bridge ?? NativeBridge.instance;
+    this.listenPort = LinkProtocol.carTcpPort,
+    this.listen = true,
+    this.discovery = true,
+    this.installId,
+    LinkConnector? connector,
+    Future<LinkServer?> Function(int port)? serverFactory,
+    this.networksProvider,
+    this.attemptTimeout = const Duration(seconds: 3),
+    this.raceCap = const Duration(seconds: 6),
+    this.helloWait = const Duration(seconds: 3),
+    this.spareGrace = const Duration(seconds: 6),
+    this.netPoll = const Duration(seconds: 5),
+    LinkDiagnostics? diagnostics,
+  }) : _bridge = bridge ?? NativeBridge.instance,
+       _connector = connector ?? _tcpConnector,
+       _serverFactory = serverFactory ?? bindLinkServer,
+       diag = diagnostics ?? LinkDiagnostics();
 
   final NativeBridge _bridge;
+  final LinkConnector _connector;
+  final Future<LinkServer?> Function(int port) _serverFactory;
+  /// Redes de la tableta (pruebas); `null` = `getWifiNetworks` / `dart:io`.
+  final Future<List<LinkNetwork>> Function()? networksProvider;
   final Duration watchdog;
 
   /// `false` = solo Bluetooth (no se intentan beacons, gateway ni IP manual).
@@ -91,6 +246,33 @@ class CarLinkClient {
   String? btAddress;
   String? btName;
 
+  /// Puerto de escucha (0 = cualquiera, para pruebas; el real queda en [boundPort]).
+  final int listenPort;
+
+  /// Escuchar conexiones del celular.
+  final bool listen;
+
+  /// Escuchar beacons del celular y enviar los propios.
+  final bool discovery;
+
+  /// Identificador estable de esta tableta (si es `null` se lee/crea en [start]).
+  String? installId;
+
+  final Duration attemptTimeout;
+
+  /// Tope de una carrera de intentos (luego se espera el backoff y se reintenta).
+  final Duration raceCap;
+
+  /// Cuánto se espera el `hello` de una conexión que llega con un enlace activo.
+  final Duration helloWait;
+
+  /// Cuánto se guarda de reserva la conexión duplicada antes de cerrarla.
+  final Duration spareGrace;
+  final Duration netPoll;
+
+  /// Registro para Configuración → Diagnóstico.
+  final LinkDiagnostics diag;
+
   final ValueNotifier<LinkStatus> status = ValueNotifier(LinkStatus.disconnected);
   final _messages = StreamController<LinkMessage>.broadcast();
 
@@ -99,11 +281,28 @@ class CarLinkClient {
 
   bool get canConnect => socketsSupported || _bridge.isSupported;
 
+  /// Puerto en el que se escucha de verdad (`null` si no se pudo).
+  int? get boundPort => _server?.port;
+
+  /// `id` del celular conectado (del `hello`, v2).
+  String? get peerId => _session?.peer.id;
+
   bool _running = false;
-  LinkConnection? _conn;
+  _Session? _session;
+  _Peer? _spare;
+  Timer? _spareTimer;
+  _Race? _race;
+  bool _rfcommBusy = false;
   Completer<void>? _wake;
   StreamSubscription<BeaconHit>? _beaconSub;
   Timer? _beaconRetry;
+  LinkServer? _server;
+  StreamSubscription<LinkConnection>? _serverSub;
+  Timer? _serverRetry;
+  UdpSender? _udp;
+  Timer? _beaconTimer;
+  Timer? _netTimer;
+  String? _netKey;
   final Map<String, _Beacon> _beacons = {};
   String _selfName = 'Tableta';
 
@@ -118,19 +317,44 @@ class CarLinkClient {
     final info = await _bridge.getDeviceInfo();
     final model = info['model'] as String?;
     if (model != null && model.isNotEmpty) _selfName = model;
+    installId ??= await LinkIdentity.load();
+    if (!_running) return;
     await _bridge.acquireMulticastLock();
-    _listenBeacons();
+    if (discovery) _listenBeacons();
+    if (listen) await _startServer();
+    await _refreshNetworks();
+    if (discovery) await _startBeaconing();
+    var ticks = 0;
+    _netTimer = Timer.periodic(netPoll, (_) {
+      // Sin enlace: cada [netPoll]; con enlace basta cada 6 vueltas (para los beacons).
+      if (_session == null || ++ticks % 6 == 0) unawaited(_refreshNetworks());
+    });
     unawaited(_loop());
   }
 
   Future<void> stop() async {
     _running = false;
     _wakeUp();
+    _race?.finish();
+    _netTimer?.cancel();
+    _netTimer = null;
+    _beaconTimer?.cancel();
+    _beaconTimer = null;
+    _udp?.close();
+    _udp = null;
     await _beaconSub?.cancel();
     _beaconSub = null;
     _beaconRetry?.cancel();
-    await _conn?.close();
-    _conn = null;
+    _serverRetry?.cancel();
+    await _serverSub?.cancel();
+    _serverSub = null;
+    await _server?.close();
+    _server = null;
+    diag.listeningPort = null;
+    _dropSpare();
+    final s = _session;
+    _session = null;
+    await s?.peer.close();
     await _bridge.releaseMulticastLock();
     status.value = LinkStatus.disconnected;
   }
@@ -139,6 +363,7 @@ class CarLinkClient {
     await stop();
     await _messages.close();
     status.dispose();
+    diag.dispose();
   }
 
   /// Cambia la configuración y fuerza un nuevo intento de conexión.
@@ -153,19 +378,49 @@ class CarLinkClient {
 
   /// Cierra la conexión actual (si hay) y reintenta de inmediato.
   void reconnect() {
-    _conn?.close();
+    diag.note('Reintento manual');
+    _session?.peer.close();
     _wakeUp();
   }
 
   /// Envía un mensaje al celular. `false` si no hay conexión.
   Future<bool> send(Map<String, dynamic> msg) async {
-    final c = _conn;
+    final c = _session?.peer.conn;
     if (c == null) return false;
     return c.sendLine(LinkProtocol.encodeLine(msg).trimRight());
   }
 
   Future<bool> sendCommand(LinkAction action, {int? positionMs}) =>
       send(LinkProtocol.cmd(action, positionMs: positionMs));
+
+  /// Redes actuales (se refrescan solas; esto fuerza una lectura).
+  Future<List<LinkNetwork>> refreshNetworks() => _refreshNetworks();
+
+  // ---------------------------------------------------------------------------
+  // Decisión (pura)
+
+  /// Qué hacer con una conexión nueva [incoming] habiendo (o no) un enlace [current].
+  /// - Sin enlace → [LinkDecision.adopt].
+  /// - El actual no recibió nada en [staleAfter] → [LinkDecision.replace].
+  /// - El actual nunca mandó `hello` y el nuevo sí → replace.
+  /// - El actual es Bluetooth y llega Wi-Fi del mismo celular (o sin `id`) → replace (Wi-Fi
+  ///   es más rápido y lleva las carátulas).
+  /// - Si no → [LinkDecision.keepCurrent]: se queda el más viejo (el que se estableció
+  ///   antes), igual que el celular, así ambos lados convergen en la misma conexión.
+  static LinkDecision decide({
+    required LinkPeerInfo? current,
+    required LinkPeerInfo incoming,
+    required DateTime now,
+    Duration staleAfter = const Duration(seconds: 25),
+  }) {
+    if (current == null) return LinkDecision.adopt;
+    if (now.difference(current.lastRx) >= staleAfter) return LinkDecision.replace;
+    // Como el celular: si el actual nunca respondió (sin `hello`) y el nuevo sí, gana el nuevo.
+    if (!current.answered && incoming.answered) return LinkDecision.replace;
+    final samePhone = current.id == null || incoming.id == null || current.id == incoming.id;
+    if (samePhone && current.transport == 'bt' && incoming.transport == 'wifi') return LinkDecision.replace;
+    return LinkDecision.keepCurrent;
+  }
 
   // ---------------------------------------------------------------------------
 
@@ -190,7 +445,15 @@ class CarLinkClient {
         if (m is! BeaconMessage) return;
         final isNew = !_beacons.containsKey(hit.address);
         _beacons[hit.address] = _Beacon(m.port, m.device, DateTime.now());
-        if (isNew && useWifi && !status.value.isConnected) _wakeUp();
+        diag.heard(hit.address, device: m.device, port: m.port, id: m.id);
+        if (!useWifi || _session != null) return;
+        // Carrera en curso: el intento a este celular arranca ya, sin esperar a los lentos.
+        final race = _race;
+        if (race != null && !race.isDone) {
+          _attemptTcp(race, hit.address, m.port);
+        } else if (isNew) {
+          _wakeUp();
+        }
       },
       onDone: () {
         // No se pudo enlazar (o se cerró): reintentar más tarde.
@@ -203,65 +466,342 @@ class CarLinkClient {
     );
   }
 
+  Future<void> _startServer() async {
+    if (!socketsSupported || !_running) return;
+    final s = await _serverFactory(listenPort);
+    if (!_running) {
+      await s?.close();
+      return;
+    }
+    if (s == null) {
+      diag.listeningPort = null;
+      diag.note('No se pudo escuchar en el puerto $listenPort; se reintenta en 5 s');
+      _serverRetry = Timer(const Duration(seconds: 5), () => unawaited(_startServer()));
+      return;
+    }
+    _server = s;
+    diag.listeningPort = s.port;
+    diag.note('Escuchando conexiones del celular en el puerto ${s.port}');
+    _serverSub = s.connections.listen((c) {
+      diag.markInbound();
+      diag.attempt(
+        LinkAttempt(at: DateTime.now(), target: c.remoteAddress, transport: c.transport, ok: true, inbound: true),
+      );
+      unawaited(_offer(c, inbound: true));
+    });
+  }
+
+  Future<void> _startBeaconing() async {
+    if (!socketsSupported) return;
+    _udp = await openUdpSender();
+    if (_udp == null || !_running) return;
+    void tick() {
+      final udp = _udp;
+      final id = installId;
+      if (udp == null || id == null) return;
+      final payload = LinkProtocol.encodeLine(
+        LinkProtocol.carBeacon(device: _selfName, id: id, port: boundPort ?? listenPort),
+      ).trimRight();
+      var any = false;
+      for (final host in beaconTargets(diag.networks)) {
+        any = udp.send(host, LinkProtocol.carBeaconPort, payload) || any;
+      }
+      if (any) diag.sentBeacon();
+    }
+
+    tick();
+    _beaconTimer = Timer.periodic(LinkProtocol.carBeaconInterval, (_) => tick());
+  }
+
+  Future<List<LinkNetwork>> _readNetworks() async {
+    final custom = networksProvider;
+    if (custom != null) return custom();
+    if (_bridge.isSupported) {
+      final raw = await _bridge.getWifiNetworks();
+      final list = [for (final m in raw) ?LinkNetwork.fromMap(m)];
+      if (list.isNotEmpty) return list;
+    }
+    return [for (final ip in await localIPv4s()) LinkNetwork(ip: ip)];
+  }
+
+  Future<List<LinkNetwork>> _refreshNetworks() async {
+    final list = await _readNetworks();
+    diag.setNetworks(list);
+    final key = (list.map((n) => n.ip).toList()..sort()).join(',');
+    final old = _netKey;
+    _netKey = key;
+    if (old != null && old != key && _running) {
+      diag.note('Cambiaron las redes: ${key.isEmpty ? 'ninguna' : key}');
+      if (_session == null) {
+        // Se reintenta ya (y los intentos de la carrera actual siguen).
+        final race = _race;
+        if (race != null && !race.isDone) {
+          unawaited(_addTargets(race));
+        } else {
+          _wakeUp();
+        }
+      }
+    }
+    return list;
+  }
+
   Future<void> _loop() async {
     var backoff = const Duration(seconds: 1);
     while (_running) {
-      status.value = LinkStatus.searching;
-      final conn = await _race();
-      if (!_running) {
-        await conn?.close();
-        break;
-      }
-      if (conn == null) {
-        await _sleep(backoff);
-        backoff = Duration(
-          milliseconds: math.min(backoff.inMilliseconds * 2, math.max(1000, maxBackoff.inMilliseconds)),
-        );
+      final s = _session;
+      if (s != null) {
+        await s.done.future;
+        if (!_running) break;
+        backoff = const Duration(seconds: 1);
+        if (_session == null) await _sleep(const Duration(milliseconds: 300));
         continue;
       }
-      backoff = const Duration(seconds: 1);
-      await _serve(conn);
-      if (_running) await _sleep(const Duration(milliseconds: 600));
+      status.value = LinkStatus.searching;
+      await _runRace();
+      if (!_running) break;
+      if (_session != null) continue;
+      await _sleep(backoff);
+      backoff = Duration(
+        milliseconds: math.min(backoff.inMilliseconds * 2, math.max(1000, maxBackoff.inMilliseconds)),
+      );
     }
   }
 
-  /// Lanza todos los intentos en paralelo; devuelve la primera conexión.
-  Future<LinkConnection?> _race() async {
+  /// Lanza todos los intentos en paralelo y termina cuando: hay enlace (saliente o
+  /// entrante), fallaron todos los intentos Wi-Fi, o pasó [raceCap].
+  Future<void> _runRace() async {
+    final race = _race = _Race();
+    final cap = Timer(raceCap, race.finish);
+    await _addTargets(race);
+    final bt = btAddress;
+    final hasBt = bt != null && bt.isNotEmpty && _bridge.isSupported;
+    if (hasBt) _startRfcomm(bt);
+    if (race.pending == 0) {
+      if (hasBt && _rfcommBusy) {
+        race.waitBt = true; // solo Bluetooth: se espera (con el tope)
+      } else {
+        race.finish();
+      }
+    }
+    await race.done;
+    cap.cancel();
+    if (identical(_race, race)) _race = null;
+  }
+
+  Future<void> _addTargets(_Race race) async {
+    if (!useWifi || !socketsSupported) return;
     final now = DateTime.now();
     _beacons.removeWhere((_, b) => now.difference(b.at) > const Duration(seconds: 15));
-
-    final gw = useWifi ? await _bridge.getGatewayIp() : null;
+    final gw = await _bridge.getGatewayIp();
     // Con el hotspot de la tableta encendido, el celular es un cliente: sus IPs están en
     // la tabla de vecinos (ARP). Se refresca en cada intento.
-    final neighbors = useWifi ? await _bridge.getNeighborIps() : const <String>[];
+    final neighbors = await _bridge.getNeighborIps();
+    final gateways = [?gw, for (final n in diag.networks) ?n.gateway];
     final targets = buildTargets(
       beacons: {for (final e in _beacons.entries) e.key: e.value.port},
-      gateway: gw,
+      gateway: gateways.isEmpty ? null : gateways.first,
       manualIp: manualIp,
-      neighbors: neighbors,
+      neighbors: [...gateways.skip(1), ...neighbors],
+    );
+    if (race.isDone) return;
+    for (final t in targets.entries) {
+      _attemptTcp(race, t.key, t.value);
+    }
+  }
+
+  void _attemptTcp(_Race race, String host, int port) {
+    final key = '$host:$port';
+    if (race.isDone || !race.tried.add(key)) return;
+    race.pending++;
+    final sw = Stopwatch()..start();
+    String? error;
+    _connector(host, port, attemptTimeout, (e) => error = e).then((c) {
+      race.pending--;
+      diag.attempt(
+        LinkAttempt(
+          at: DateTime.now(),
+          target: key,
+          transport: 'wifi',
+          ok: c != null,
+          error: c == null ? (error ?? 'sin respuesta') : null,
+          ms: sw.elapsedMilliseconds,
+        ),
+      );
+      if (c != null) {
+        unawaited(_offer(c, inbound: false));
+      } else if (race.pending == 0 && !race.waitBt) {
+        race.finish();
+      }
+    });
+  }
+
+  /// RFCOMM en segundo plano (puede tardar varios segundos): si conecta, se ofrece como
+  /// cualquier otra conexión.
+  void _startRfcomm(String address) {
+    if (_rfcommBusy) return;
+    _rfcommBusy = true;
+    final sw = Stopwatch()..start();
+    final conn = _RfcommConnection(_bridge, address);
+    _bridge
+        .connectRfcomm(address)
+        .then((ok) async {
+          diag.attempt(
+            LinkAttempt(
+              at: DateTime.now(),
+              target: address,
+              transport: 'bt',
+              ok: ok,
+              error: ok ? null : 'no conectó',
+              ms: sw.elapsedMilliseconds,
+            ),
+          );
+          if (ok && _running) {
+            await _offer(conn, inbound: false);
+          } else {
+            await conn.dispose();
+          }
+        })
+        .whenComplete(() {
+          _rfcommBusy = false;
+          final race = _race;
+          if (race != null && race.waitBt) race.finish();
+        });
+  }
+
+  /// Punto único de entrada de toda conexión (saliente, entrante o Bluetooth).
+  Future<void> _offer(LinkConnection conn, {required bool inbound}) async {
+    if (!_running) {
+      await conn.close();
+      return;
+    }
+    final p = _Peer(conn, inbound: inbound);
+    if (_session == null) {
+      _adopt(p);
+      return;
+    }
+    // Ya hay enlace: se decide con el `id` del recién llegado (si lo manda pronto).
+    await p.waitHello(helloWait);
+    if (p.isClosed) return;
+    if (!_running) {
+      await p.close();
+      return;
+    }
+    final cur = _session;
+    final d = decide(current: cur?.peer.info, incoming: p.info, now: DateTime.now(), staleAfter: watchdog);
+    final who = '${inbound ? 'entrante' : 'saliente'} ${p.transport} ${p.address}';
+    switch (d) {
+      case LinkDecision.adopt:
+        _adopt(p);
+      case LinkDecision.replace:
+        diag.note('Se cambia al enlace $who (el anterior estaba caído o era Bluetooth)');
+        if (cur != null) {
+          cur.replaced = true;
+          unawaited(cur.peer.close());
+        }
+        _adopt(p);
+      case LinkDecision.keepCurrent:
+        diag.note('Conexión duplicada $who: se guarda de reserva ${spareGrace.inSeconds} s');
+        _setSpare(p);
+    }
+  }
+
+  /// La duplicada no se cierra enseguida: si el celular eligió esa (y cierra la nuestra),
+  /// se promueve sin perder tiempo. Si no, se cierra al pasar [spareGrace].
+  void _setSpare(_Peer p) {
+    _dropSpare();
+    _spare = p;
+    _spareTimer = Timer(spareGrace, () {
+      if (identical(_spare, p)) _dropSpare();
+    });
+    p.closed.then((_) {
+      if (identical(_spare, p)) {
+        _spare = null;
+        _spareTimer?.cancel();
+      }
+    });
+  }
+
+  void _dropSpare() {
+    _spareTimer?.cancel();
+    _spareTimer = null;
+    final s = _spare;
+    _spare = null;
+    if (s != null) unawaited(s.close());
+  }
+
+  void _adopt(_Peer p) {
+    final s = _session = _Session(p);
+    final beacon = _beacons[p.address];
+    final name = p.device ?? (p.transport == 'bt' ? (btName ?? 'Celular') : (beacon?.device ?? 'Celular'));
+    status.value = LinkStatus.connected(device: name, transport: p.transport, address: p.address, inbound: p.inbound);
+    diag
+      ..markConnected()
+      ..note('Conectado (${p.inbound ? 'el celular marcó' : 'la tableta marcó'}) por ${p.transport} con ${p.address}');
+    _race?.finish();
+    _wakeUp();
+    unawaited(_serve(s));
+  }
+
+  Future<void> _serve(_Session s) async {
+    final p = s.peer;
+    final conn = p.conn;
+    final done = Completer<void>();
+    final dog = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (DateTime.now().difference(p.lastRx) > watchdog) {
+        diag.note('Sin datos en ${watchdog.inSeconds} s: se da por caída');
+        p.close();
+      }
+    });
+    final sub = p.lines.listen(
+      (line) {
+        diag.markRx();
+        final msg = LinkProtocol.decodeLine(line);
+        if (msg == null) return;
+        switch (msg) {
+          case PingMessage():
+            conn.sendLine(LinkProtocol.encodeLine(LinkProtocol.pong()).trimRight());
+          case HelloMessage(:final device):
+            if (identical(_session, s)) status.value = status.value.withDevice(device);
+            _messages.add(msg);
+          case TrackMessage():
+            diag.markTrack();
+            _messages.add(msg);
+          default:
+            _messages.add(msg);
+        }
+      },
+      onDone: () {
+        if (!done.isCompleted) done.complete();
+      },
+      onError: (_) {
+        if (!done.isCompleted) done.complete();
+      },
     );
 
-    final attempts = <Future<LinkConnection?>>[
-      if (socketsSupported && useWifi)
-        for (final t in targets.entries) connectTcp(t.key, t.value),
-      if (btAddress != null && btAddress!.isNotEmpty && _bridge.isSupported) _connectRfcomm(btAddress!),
-    ];
-    if (attempts.isEmpty) return null;
+    await conn.sendLine(LinkProtocol.encodeLine(LinkProtocol.hello(_selfName, id: installId)).trimRight());
+    await conn.sendLine(LinkProtocol.encodeLine(LinkProtocol.resync()).trimRight());
 
-    final winner = Completer<LinkConnection?>();
-    var pending = attempts.length;
-    for (final a in attempts) {
-      a.then((c) {
-        if (c != null && !winner.isCompleted) {
-          winner.complete(c);
-        } else if (c != null) {
-          c.close(); // llegó tarde: se descarta
-        }
-        pending--;
-        if (pending == 0 && !winner.isCompleted) winner.complete(null);
-      });
+    await Future.any([done.future, p.closed]);
+    dog.cancel();
+    await sub.cancel();
+    await p.close();
+    if (identical(_session, s)) {
+      _session = null;
+      diag
+        ..markDisconnected()
+        ..note('Enlace cerrado (${p.address})');
+      final spare = _spare;
+      if (spare != null && !spare.isClosed && _running) {
+        // El celular se quedó con la otra conexión: se usa esa.
+        _spareTimer?.cancel();
+        _spare = null;
+        diag.note('Se usa la conexión de reserva (${spare.address})');
+        _adopt(spare);
+      } else if (_running) {
+        status.value = LinkStatus.searching;
+      }
     }
-    return winner.future;
+    if (!s.done.isCompleted) s.done.complete();
   }
 
   /// Máximo de IPs vecinas que se prueban por intento.
@@ -302,67 +842,6 @@ class CarLinkClient {
       targets[ip] = LinkProtocol.tcpPort;
     }
     return targets;
-  }
-
-  Future<LinkConnection?> _connectRfcomm(String address) async {
-    final conn = _RfcommConnection(_bridge, address);
-    final ok = await _bridge.connectRfcomm(address);
-    if (!ok) {
-      await conn.dispose();
-      return null;
-    }
-    return conn;
-  }
-
-  Future<void> _serve(LinkConnection conn) async {
-    _conn = conn;
-    final beacon = _beacons[conn.remoteAddress];
-    final initialName = conn.transport == 'bt' ? (btName ?? 'Celular') : (beacon?.device ?? 'Celular');
-    status.value = LinkStatus.connected(device: initialName, transport: conn.transport, address: conn.remoteAddress);
-
-    final done = Completer<void>();
-    Timer? dog;
-    void feed() {
-      dog?.cancel();
-      dog = Timer(watchdog, () {
-        debugPrint('CarLinkClient: watchdog — sin datos en ${watchdog.inSeconds}s');
-        conn.close();
-      });
-    }
-
-    feed();
-    final sub = conn.lines.listen(
-      (line) {
-        feed();
-        final msg = LinkProtocol.decodeLine(line);
-        if (msg == null) return;
-        switch (msg) {
-          case PingMessage():
-            conn.sendLine(LinkProtocol.encodeLine(LinkProtocol.pong()).trimRight());
-          case HelloMessage(:final device):
-            status.value = status.value.withDevice(device);
-            _messages.add(msg);
-          default:
-            _messages.add(msg);
-        }
-      },
-      onDone: () {
-        if (!done.isCompleted) done.complete();
-      },
-      onError: (_) {
-        if (!done.isCompleted) done.complete();
-      },
-    );
-
-    await conn.sendLine(LinkProtocol.encodeLine(LinkProtocol.hello(_selfName)).trimRight());
-    await conn.sendLine(LinkProtocol.encodeLine(LinkProtocol.resync()).trimRight());
-
-    await done.future;
-    dog?.cancel();
-    await sub.cancel();
-    await conn.close();
-    if (identical(_conn, conn)) _conn = null;
-    if (_running) status.value = LinkStatus.searching;
   }
 }
 

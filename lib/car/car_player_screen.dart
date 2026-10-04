@@ -889,6 +889,7 @@ class _Side extends StatelessWidget {
                   align: cfg.lyrics.align,
                   glow: cfg.lyrics.glow,
                   seek: cfg.lyrics.seek,
+                  opts: cfg.lyrics,
                 )
               : HxQueueList(items: ctrl.queue, coverFor: ctrl.demo || ctrl.idleDemo ? demoCoverFor : null),
         ),
@@ -944,6 +945,9 @@ class _FullscreenLyrics extends StatelessWidget {
       align: cfg.lyrics.align,
       glow: cfg.lyrics.glow,
       seek: cfg.lyrics.seek,
+      opts: cfg.lyrics,
+      fullscreen: true,
+      reduced: reduced,
     );
     return Center(
       child: ConstrainedBox(

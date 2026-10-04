@@ -6,6 +6,8 @@ import 'package:pixel_car_player/car/custom/car_customization.dart';
 import 'package:pixel_car_player/car/settings/car_settings_page.dart';
 import 'package:pixel_car_player/car/custom/car_custom_scope.dart';
 import 'package:pixel_car_player/car/settings/settings_controls.dart';
+import 'package:pixel_car_player/car/settings/settings_diagnostics.dart';
+import 'package:pixel_car_player/car/settings/settings_lyrics_anim.dart';
 import 'package:pixel_car_player/car/settings/settings_system.dart';
 import 'package:pixel_car_player/car/widgets/hx.dart';
 import 'package:pixel_car_player/car/widgets/loading_indicator.dart';
@@ -16,6 +18,7 @@ import 'package:pixel_car_player/data/link/car_link_client.dart';
 /// Contenido de cada categoría de Configuración.
 List<Widget> buildCategory(CarSettingsCategory cat, CarController c, VoidCallback onChangeMode) => switch (cat) {
   CarSettingsCategory.conexion => [_ConnectionPage(c: c)],
+  CarSettingsCategory.diagnostico => [DiagnosticsSettings(c: c)],
   CarSettingsCategory.hotspot => [HotspotSettings(c: c)],
   CarSettingsCategory.inicio => [_StartupPage(c: c)],
   CarSettingsCategory.diseno => [_DesignPage(c: c)],
@@ -833,19 +836,25 @@ class _CoverPage extends StatelessWidget {
                 onChanged: (x) => c.viz((d) => d.copyWith(source: x)),
               ),
             ),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              child: VizSourceStatus(c: c),
+            ),
             if (v.wantsRealAudio) ...[
               _AudioPermissionRow(c: c),
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                child: SettingsStatus(
-                  ok: c.audioDetected,
-                  okIcon: Symbols.graphic_eq_rounded,
-                  offIcon: Symbols.volume_off_rounded,
-                  text: c.audioDetected
-                      ? 'Audio detectado: las barras siguen la música'
-                      : c.visualizerRunning
-                      ? 'Escuchando… sin audio por ahora'
-                      : 'El visualizador con el audio real no está activo',
+              SettingsItem(
+                label: 'Respuesta del visualizador',
+                desc: switch (v.response) {
+                  CarVizResponse.smooth => 'Movimiento tranquilo: más suavizado, ignora los golpes cortos.',
+                  CarVizResponse.normal => 'Como Harmonix: sube rápido y baja despacio.',
+                  CarVizResponse.precise =>
+                    'Sigue cada cuadro del audio real casi sin suavizar, con ganancia automática rápida.',
+                },
+                child: SettingsSegmented<CarVizResponse>(
+                  key: const ValueKey('viz-response'),
+                  value: v.response,
+                  options: [for (final x in CarVizResponse.values) (x, x.label)],
+                  onChanged: (x) => c.viz((d) => d.copyWith(response: x)),
                 ),
               ),
               SettingsSlider(
@@ -1208,6 +1217,7 @@ class _LyricsPage extends StatelessWidget {
             ),
           ],
         ),
+        _LyricAnimSection(c: c),
         SettingsSection(
           icon: Symbols.timer_rounded,
           title: 'Sincronización',
@@ -1241,6 +1251,99 @@ class _LyricsPage extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ],
+    );
+  }
+}
+
+/// Letra → Animación al pasar de línea (con vista previa en vivo).
+class _LyricAnimSection extends StatelessWidget {
+  const _LyricAnimSection({required this.c});
+  final CarController c;
+
+  static String _desc(CarLyricAnim a) => switch (a) {
+    CarLyricAnim.none => 'Sin transición: el color cambia de golpe.',
+    CarLyricAnim.fade => 'La línea nueva se ilumina con un fundido de color y la anterior se apaga.',
+    CarLyricAnim.slide => 'La línea nueva sube unos píxeles a su lugar mientras la anterior se apaga.',
+    CarLyricAnim.scale => 'La línea actual crece un poco (de 0,94 a 1); las demás quedan más chicas.',
+    CarLyricAnim.blur => 'Las demás líneas se desenfocan apenas y la actual se ve nítida.',
+    CarLyricAnim.karaoke => 'La línea actual se va llenando de izquierda a derecha al ritmo del tema.',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final l = c.cfg.lyrics;
+    final reduced = carReducedMotion(context, c.cfg);
+    return SettingsSection(
+      icon: Symbols.animation_rounded,
+      title: 'Animación al pasar de línea',
+      children: [
+        if (reduced)
+          const SettingsNote(
+            'Las animaciones están en «Reducidas» (Diseño → Animaciones): la letra cambia sin transición.',
+            icon: Symbols.motion_photos_paused_rounded,
+          ),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          child: LyricAnimPreview(opts: l, reduced: reduced),
+        ),
+        SettingsItem(
+          label: 'Estilo',
+          desc: _desc(l.anim),
+          child: ChoiceTiles<CarLyricAnim>(
+            key: const ValueKey('lyric-anim'),
+            value: l.anim,
+            minWidth: 150,
+            options: [for (final a in CarLyricAnim.values) (a, a.label, const <Color>[])],
+            onChanged: (x) => c.lyricsOpts((d) => d.copyWith(anim: x)),
+          ),
+        ),
+        if (l.anim != CarLyricAnim.none) ...[
+          SettingsSlider(
+            label: 'Duración',
+            desc: l.anim == CarLyricAnim.karaoke
+                ? 'Del cambio de color; el relleno dura lo que la línea.'
+                : 'Cuánto tarda la transición de una línea a la otra.',
+            value: l.animMs.toDouble(),
+            range: CarLyricsOpts.animMsRange,
+            defaultValue: 350,
+            format: (x) => '${x.round()} ms',
+            onChanged: (x) => c.lyricsOpts((d) => d.copyWith(animMs: x.round())),
+          ),
+          SettingsItem(
+            label: 'Curva',
+            desc: 'Enfatizada arranca rápido y frena suave (Material 3). Lineal = velocidad constante.',
+            child: SettingsSegmented<CarLyricCurve>(
+              value: l.animCurve,
+              options: [for (final x in CarLyricCurve.values) (x, x.label)],
+              onChanged: (x) => c.lyricsOpts((d) => d.copyWith(animCurve: x)),
+            ),
+          ),
+          SettingsSwitch(
+            label: 'También en pantalla completa',
+            description: 'Si lo apagas, la letra grande usa el fundido «Suave».',
+            value: l.animFullscreen,
+            onChanged: (x) => c.lyricsOpts((d) => d.copyWith(animFullscreen: x)),
+          ),
+        ],
+        SettingsSlider(
+          label: 'Desplazamiento de la lista',
+          desc: 'Cuánto tarda en subir hasta la línea actual (Harmonix: 600 ms).',
+          value: l.scrollMs.toDouble(),
+          range: CarLyricsOpts.scrollMsRange,
+          defaultValue: 600,
+          format: (x) => '${x.round()} ms',
+          onChanged: (x) => c.lyricsOpts((d) => d.copyWith(scrollMs: x.round())),
+        ),
+        SettingsSlider(
+          label: 'Opacidad de las otras líneas',
+          desc: 'Más baja = la línea actual resalta más.',
+          value: l.inactiveOpacity,
+          range: CarLyricsOpts.inactiveOpacityRange,
+          defaultValue: 1,
+          format: (x) => '${(x * 100).round()} %',
+          onChanged: (x) => c.lyricsOpts((d) => d.copyWith(inactiveOpacity: x)),
         ),
       ],
     );

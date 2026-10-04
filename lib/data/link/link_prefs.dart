@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Preferencias de conexión y pantalla de la tableta.
@@ -54,5 +56,36 @@ class CarPrefs {
       await p.setBool(_kScreen, keepScreenOn);
       await p.setBool(kDemo, demo);
     } catch (_) {}
+  }
+}
+
+/// Identificador estable de esta instalación (va en `hello` y en `car_beacon`, v2).
+class LinkIdentity {
+  LinkIdentity._();
+
+  static const key = 'car_install_id';
+  static String? _cached;
+
+  /// 16 caracteres hex aleatorios.
+  static String generate([math.Random? rnd]) {
+    final r = rnd ?? math.Random.secure();
+    return List.generate(16, (_) => r.nextInt(16).toRadixString(16)).join();
+  }
+
+  /// Lee el id guardado o crea uno nuevo (si no se puede guardar, dura lo que la app).
+  static Future<String> load() async {
+    final c = _cached;
+    if (c != null) return c;
+    try {
+      final p = await SharedPreferences.getInstance();
+      var id = p.getString(key);
+      if (id == null || id.length < 8) {
+        id = generate();
+        await p.setString(key, id);
+      }
+      return _cached = id;
+    } catch (_) {
+      return _cached = generate();
+    }
   }
 }

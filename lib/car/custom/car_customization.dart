@@ -39,6 +39,62 @@ enum CarVizSource {
   simulated,
 }
 
+/// Animación de la letra al pasar de línea.
+enum CarLyricAnim {
+  /// Cambio instantáneo de color.
+  none('Ninguna'),
+
+  /// Fundido de color (y brillo).
+  fade('Suave'),
+
+  /// La línea nueva sube ~10 px a su lugar mientras la anterior se apaga.
+  slide('Deslizar'),
+
+  /// La línea actual crece de 0,94 a 1; las demás quedan un poco más chicas.
+  scale('Escala'),
+
+  /// Las demás líneas se desenfocan apenas; la actual se ve nítida.
+  blur('Desenfoque'),
+
+  /// La línea actual se va llenando de izquierda a derecha con el tiempo del tema.
+  karaoke('Karaoke');
+
+  const CarLyricAnim(this.label);
+  final String label;
+}
+
+/// Curva de la animación de la letra.
+enum CarLyricCurve {
+  emphasized('Enfatizada'),
+  standard('Estándar'),
+  linear('Lineal');
+
+  const CarLyricCurve(this.label);
+  final String label;
+}
+
+/// Qué tan rápido siguen las barras al audio real.
+enum CarVizResponse {
+  /// Más suavizado (movimiento tranquilo).
+  smooth('Suave'),
+
+  /// El de Harmonix (ataque 0,35 · caída 0,12).
+  normal('Normal'),
+
+  /// Casi sin suavizado: las barras siguen cada cuadro del FFT.
+  precise('Precisa');
+
+  const CarVizResponse(this.label);
+  final String label;
+
+  /// Factor de ataque (sube) y caída (baja) por cuadro de 60 fps.
+  (double attack, double release) get smoothing => switch (this) {
+    CarVizResponse.smooth => (0.2, 0.07),
+    CarVizResponse.normal => (0.35, 0.12),
+    CarVizResponse.precise => (0.8, 0.4),
+  };
+}
+
 /// Secciones del modelo (para restablecer por partes).
 enum CarSection { connection, startup, hotspot, design, cover, visualizer, lyrics, visibility, texts, gestures }
 
@@ -469,6 +525,7 @@ class CarVisualizerOpts with _JsonEquality {
     this.source = CarVizSource.auto,
     this.sensitivity = 1.0,
     this.animateAlways = false,
+    this.response = CarVizResponse.normal,
   });
 
   /// Multiplicador del largo de las barras.
@@ -492,6 +549,9 @@ class CarVisualizerOpts with _JsonEquality {
   /// Animar aunque no se sepa si está sonando (p. ej. la app Bluetooth del radio no avisa).
   final bool animateAlways;
 
+  /// Suavizado de las barras (Suave / Normal / Precisa).
+  final CarVizResponse response;
+
   static const amplificationRange = CarRange(0.25, 3.0, 0.05);
   static const barsRange = CarRange(16, 96, 2);
   static const thicknessRange = CarRange(0.4, 2.5, 0.05);
@@ -514,6 +574,7 @@ class CarVisualizerOpts with _JsonEquality {
     CarVizSource? source,
     double? sensitivity,
     bool? animateAlways,
+    CarVizResponse? response,
   }) => CarVisualizerOpts(
     amplification: amplification ?? this.amplification,
     bars: bars ?? this.bars,
@@ -526,6 +587,7 @@ class CarVisualizerOpts with _JsonEquality {
     source: source ?? this.source,
     sensitivity: sensitivity ?? this.sensitivity,
     animateAlways: animateAlways ?? this.animateAlways,
+    response: response ?? this.response,
   );
 
   @override
@@ -541,6 +603,7 @@ class CarVisualizerOpts with _JsonEquality {
     'source': source.name,
     'sensitivity': sensitivity,
     'animateAlways': animateAlways,
+    'response': response.name,
   };
 
   factory CarVisualizerOpts.fromJson(Object? json) {
@@ -560,6 +623,7 @@ class CarVisualizerOpts with _JsonEquality {
       source: _enum(CarVizSource.values, m['source'], d.source),
       sensitivity: _num(m['sensitivity'], d.sensitivity, sensitivityRange),
       animateAlways: _bool(m['animateAlways'], d.animateAlways),
+      response: _enum(CarVizResponse.values, m['response'], d.response),
     );
   }
 }
@@ -573,6 +637,12 @@ class CarLyricsOpts with _JsonEquality {
     this.glow = true,
     this.offsetMs = 150,
     this.seek = CarSeekMode.tap,
+    this.anim = CarLyricAnim.slide,
+    this.animMs = 350,
+    this.animCurve = CarLyricCurve.emphasized,
+    this.animFullscreen = true,
+    this.scrollMs = 600,
+    this.inactiveOpacity = 1.0,
   });
 
   final double scale;
@@ -586,9 +656,32 @@ class CarLyricsOpts with _JsonEquality {
   final int offsetMs;
   final CarSeekMode seek;
 
+  /// Animación al pasar de línea.
+  final CarLyricAnim anim;
+
+  /// Duración de esa animación (ms).
+  final int animMs;
+  final CarLyricCurve animCurve;
+
+  /// También en la letra a pantalla completa (si no, allí se usa «Suave»).
+  final bool animFullscreen;
+
+  /// Duración del desplazamiento hasta la línea actual (ms; Harmonix: 600).
+  final int scrollMs;
+
+  /// Opacidad de las líneas que no suenan (1 = solo el color `outline`).
+  final double inactiveOpacity;
+
   static const scaleRange = CarRange(0.7, 1.8, 0.05);
   static const spacingRange = CarRange(0.5, 3.0, 0.1);
   static const offsetRange = CarRange(-1000, 2000, 50);
+  static const animMsRange = CarRange(100, 800, 50);
+  static const scrollMsRange = CarRange(150, 1500, 50);
+  static const inactiveOpacityRange = CarRange(0.2, 1.0, 0.05);
+
+  /// Animación que corresponde a la letra normal o a la de pantalla completa.
+  CarLyricAnim animFor({bool fullscreen = false}) =>
+      fullscreen && !animFullscreen && anim != CarLyricAnim.none ? CarLyricAnim.fade : anim;
 
   CarLyricsOpts copyWith({
     double? scale,
@@ -597,6 +690,12 @@ class CarLyricsOpts with _JsonEquality {
     bool? glow,
     int? offsetMs,
     CarSeekMode? seek,
+    CarLyricAnim? anim,
+    int? animMs,
+    CarLyricCurve? animCurve,
+    bool? animFullscreen,
+    int? scrollMs,
+    double? inactiveOpacity,
   }) => CarLyricsOpts(
     scale: scale ?? this.scale,
     spacing: spacing ?? this.spacing,
@@ -604,6 +703,12 @@ class CarLyricsOpts with _JsonEquality {
     glow: glow ?? this.glow,
     offsetMs: offsetMs ?? this.offsetMs,
     seek: seek ?? this.seek,
+    anim: anim ?? this.anim,
+    animMs: animMs ?? this.animMs,
+    animCurve: animCurve ?? this.animCurve,
+    animFullscreen: animFullscreen ?? this.animFullscreen,
+    scrollMs: scrollMs ?? this.scrollMs,
+    inactiveOpacity: inactiveOpacity ?? this.inactiveOpacity,
   );
 
   @override
@@ -614,6 +719,12 @@ class CarLyricsOpts with _JsonEquality {
     'glow': glow,
     'offsetMs': offsetMs,
     'seek': seek.name,
+    'anim': anim.name,
+    'animMs': animMs,
+    'animCurve': animCurve.name,
+    'animFullscreen': animFullscreen,
+    'scrollMs': scrollMs,
+    'inactiveOpacity': inactiveOpacity,
   };
 
   factory CarLyricsOpts.fromJson(Object? json) {
@@ -626,6 +737,12 @@ class CarLyricsOpts with _JsonEquality {
       glow: _bool(m['glow'], d.glow),
       offsetMs: _num(m['offsetMs'], d.offsetMs.toDouble(), offsetRange).round(),
       seek: _enum(CarSeekMode.values, m['seek'], d.seek),
+      anim: _enum(CarLyricAnim.values, m['anim'], d.anim),
+      animMs: _num(m['animMs'], d.animMs.toDouble(), animMsRange).round(),
+      animCurve: _enum(CarLyricCurve.values, m['animCurve'], d.animCurve),
+      animFullscreen: _bool(m['animFullscreen'], d.animFullscreen),
+      scrollMs: _num(m['scrollMs'], d.scrollMs.toDouble(), scrollMsRange).round(),
+      inactiveOpacity: _num(m['inactiveOpacity'], d.inactiveOpacity, inactiveOpacityRange),
     );
   }
 }
@@ -774,7 +891,14 @@ class CarStartupOpts with _JsonEquality {
 /// Hotspot del carro (la tableta comparte su conexión; el celular se conecta a ella).
 @immutable
 class CarHotspotOpts with _JsonEquality {
-  const CarHotspotOpts({this.autoEnable = false, this.recheckMinutes = 0, this.ssid = '', this.password = ''});
+  const CarHotspotOpts({
+    this.autoEnable = false,
+    this.recheckMinutes = 0,
+    this.ssid = '',
+    this.password = '',
+    this.shareWithPhone = true,
+    this.allowTemporary = false,
+  });
 
   /// Al iniciar: verificar el hotspot y encenderlo si está apagado.
   final bool autoEnable;
@@ -786,13 +910,29 @@ class CarHotspotOpts with _JsonEquality {
   final String ssid;
   final String password;
 
+  /// Mandar la red al celular al conectar (`{"t":"hotspot"}`) para que se una solo.
+  final bool shareWithPhone;
+
+  /// Si el radio no deja encender su hotspot, permitir uno temporal (LocalOnlyHotspot, con
+  /// nombre y clave aleatorios). Apagado: solo se usa la red configurada en el radio.
+  final bool allowTemporary;
+
   static const recheckRange = CarRange(0, 60, 5);
 
-  CarHotspotOpts copyWith({bool? autoEnable, int? recheckMinutes, String? ssid, String? password}) => CarHotspotOpts(
+  CarHotspotOpts copyWith({
+    bool? autoEnable,
+    int? recheckMinutes,
+    String? ssid,
+    String? password,
+    bool? shareWithPhone,
+    bool? allowTemporary,
+  }) => CarHotspotOpts(
     autoEnable: autoEnable ?? this.autoEnable,
     recheckMinutes: recheckMinutes ?? this.recheckMinutes,
     ssid: ssid ?? this.ssid,
     password: password ?? this.password,
+    shareWithPhone: shareWithPhone ?? this.shareWithPhone,
+    allowTemporary: allowTemporary ?? this.allowTemporary,
   );
 
   @override
@@ -801,6 +941,8 @@ class CarHotspotOpts with _JsonEquality {
     'recheckMinutes': recheckMinutes,
     'ssid': ssid,
     'password': password,
+    'shareWithPhone': shareWithPhone,
+    'allowTemporary': allowTemporary,
   };
 
   factory CarHotspotOpts.fromJson(Object? json) {
@@ -811,6 +953,8 @@ class CarHotspotOpts with _JsonEquality {
       recheckMinutes: _num(m['recheckMinutes'], d.recheckMinutes.toDouble(), recheckRange).round(),
       ssid: _str(m['ssid'], d.ssid, 64),
       password: _str(m['password'], d.password, 128),
+      shareWithPhone: _bool(m['shareWithPhone'], d.shareWithPhone),
+      allowTemporary: _bool(m['allowTemporary'], d.allowTemporary),
     );
   }
 }

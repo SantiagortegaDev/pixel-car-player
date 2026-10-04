@@ -12,6 +12,12 @@ import 'package:provider/provider.dart';
 /// Categorías de Configuración (el nombre del enum es el id de `?settings=` en web).
 enum CarSettingsCategory {
   conexion('Conexión', Symbols.link_rounded, [CarSection.connection], 'Cómo encuentra la tableta a tu celular.'),
+  diagnostico(
+    'Diagnóstico',
+    Symbols.troubleshoot_rounded,
+    [],
+    'Qué ve la tableta: redes, avisos del celular, intentos de conexión y los pasos que faltan.',
+  ),
   hotspot('Hotspot', Symbols.wifi_tethering_rounded, [
     CarSection.hotspot,
   ], 'La red Wi-Fi del carro: la tableta la comparte y el celular se conecta a ella.'),

@@ -13,6 +13,8 @@ class HotspotInfo {
     this.method = 'unknown',
     this.canWriteSettings = false,
     this.loaded = false,
+    this.configuredSsid,
+    this.configuredPassword,
   });
 
   static const unknown = HotspotInfo();
@@ -31,6 +33,14 @@ class HotspotInfo {
   /// Ya se consultó al menos una vez.
   final bool loaded;
 
+  /// La red configurada en los ajustes del radio (puede faltar: Android 11+ suele ocultarla).
+  final String? configuredSsid;
+  final String? configuredPassword;
+
+  /// Nombre y clave a usar/mostrar: los de la red configurada en el radio si se conocen.
+  String? get networkSsid => configuredSsid ?? ssid;
+  String? get networkPassword => configuredSsid != null ? configuredPassword : password;
+
   factory HotspotInfo.fromMap(Map<String, dynamic> m, {HotspotInfo? previous}) {
     String? str(Object? v) => v is String && v.isNotEmpty ? v : null;
     final p = previous ?? unknown;
@@ -41,6 +51,8 @@ class HotspotInfo {
       method: str(m['method']) ?? p.method,
       canWriteSettings: m['canWriteSettings'] is bool ? m['canWriteSettings'] as bool : p.canWriteSettings,
       loaded: true,
+      configuredSsid: str(m['configuredSsid']) ?? p.configuredSsid,
+      configuredPassword: str(m['configuredPassword']) ?? p.configuredPassword,
     );
   }
 
@@ -51,6 +63,8 @@ class HotspotInfo {
     method: method ?? this.method,
     canWriteSettings: canWriteSettings,
     loaded: loaded,
+    configuredSsid: configuredSsid,
+    configuredPassword: configuredPassword,
   );
 
   @override
@@ -61,10 +75,13 @@ class HotspotInfo {
       other.password == password &&
       other.method == method &&
       other.canWriteSettings == canWriteSettings &&
-      other.loaded == loaded;
+      other.loaded == loaded &&
+      other.configuredSsid == configuredSsid &&
+      other.configuredPassword == configuredPassword;
 
   @override
-  int get hashCode => Object.hash(enabled, ssid, password, method, canWriteSettings, loaded);
+  int get hashCode =>
+      Object.hash(enabled, ssid, password, method, canWriteSettings, loaded, configuredSsid, configuredPassword);
 }
 
 /// Aviso para la pantalla: no se pudo encender solo, hay que ir a los ajustes.
@@ -93,7 +110,9 @@ String? hotspotErrorText(Object? code) => switch (code) {
 abstract class HotspotApi {
   bool get supported;
   Future<Map<String, dynamic>> getState();
-  Future<Map<String, dynamic>> setEnabled(bool enabled);
+  /// [allowLocalOnly]: si el radio no deja encender su hotspot, crear uno temporal
+  /// (LocalOnlyHotspot, SSID/clave aleatorios).
+  Future<Map<String, dynamic>> setEnabled(bool enabled, {bool allowLocalOnly = false});
 }
 
 class _BridgeHotspotApi implements HotspotApi {
@@ -104,7 +123,8 @@ class _BridgeHotspotApi implements HotspotApi {
   @override
   Future<Map<String, dynamic>> getState() => b.getHotspotState();
   @override
-  Future<Map<String, dynamic>> setEnabled(bool enabled) => b.setHotspotEnabled(enabled);
+  Future<Map<String, dynamic>> setEnabled(bool enabled, {bool allowLocalOnly = false}) =>
+      b.setHotspotEnabled(enabled, allowLocalOnly: allowLocalOnly);
 }
 
 /// Hotspot del carro: consulta el estado, lo enciende/apaga y, si está activado
@@ -144,11 +164,15 @@ class CarHotspot extends ChangeNotifier {
     return _info;
   }
 
+  /// Permitir el hotspot temporal (Configuración → Hotspot → avanzado). Apagado = solo se
+  /// enciende la red configurada en el radio.
+  bool allowTemporary = false;
+
   /// Enciende/apaga. Devuelve la respuesta nativa (`ok`, `method`, `needsSettings`…).
   Future<Map<String, dynamic>> setEnabled(bool on) async {
     _setBusy(true);
     try {
-      final r = await _api.setEnabled(on);
+      final r = await _api.setEnabled(on, allowLocalOnly: on && allowTemporary);
       if (r['ok'] == true) {
         _set(
           HotspotInfo.fromMap({
@@ -167,12 +191,15 @@ class CarHotspot extends ChangeNotifier {
     }
   }
 
-  /// "Verificar y encender": si está apagado (o no se sabe) intenta encenderlo; si el
-  /// sistema no lo permite, publica un [prompt].
+  /// "Verificar y encender": solo si el sistema dice que está **apagado** intenta
+  /// encenderlo (la red configurada en el radio; nunca lo apaga ni lo reinicia si ya está
+  /// encendido, ni lo toca si no se puede leer el estado). Si no se puede, publica un
+  /// [prompt]. Devuelve si quedó encendido.
   Future<bool> ensureOn() async {
     if (!_api.supported) return false;
     final st = await refresh();
     if (st.enabled == true) return true;
+    if (st.enabled == null) return false;
     final r = await setEnabled(true);
     final ok = r['ok'] == true && r['needsSettings'] != true;
     if (!ok && !_disposed) {

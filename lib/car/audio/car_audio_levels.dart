@@ -32,6 +32,13 @@ class CarAudioLevels {
 
   final Float32List bands = Float32List(bandCount);
   double rms = 0;
+
+  /// Auto-ganancia rápida (Respuesta "Precisa"): además de la ganancia lenta del lado
+  /// nativo, normaliza por el pico de los últimos ~1 s para que las barras usen todo el largo.
+  bool fastGain = false;
+  double _peak = 0;
+  double _fps = 0;
+  int _frames = 0;
   DateTime? _lastFrame;
   DateTime? _lastLoud;
   Timer? _expiry;
@@ -53,17 +60,37 @@ class CarAudioLevels {
     onFrame(b is List ? b : const [], r is num ? r.toDouble() : 0);
   }
 
+  /// Cuadros por segundo que llegan del Visualizer (0 sin señal).
+  double get fps => live ? _fps : 0;
+
+  /// Cuadros recibidos desde el último [reset].
+  int get frames => _frames;
+
+  /// Ganancia extra de [fastGain] (1 = ninguna).
+  double get gain => fastGain ? (0.9 / math.max(_peak, 0.15)).clamp(1.0, 4.0).toDouble() : 1.0;
+
   void onFrame(List<dynamic> values, double level) {
     if (_disposed) return;
     final now = _clock();
+    final prev = _lastFrame;
     _lastFrame = now;
+    _frames++;
+    if (prev != null) {
+      final dt = now.difference(prev).inMicroseconds / 1e6;
+      if (dt > 0 && dt <= 1) _fps = _fps == 0 ? 1 / dt : _fps * 0.85 + (1 / dt) * 0.15;
+    }
     rms = level.isFinite ? level : 0;
     final n = math.min(values.length, bandCount);
+    var maxBand = 0.0;
     for (var i = 0; i < bandCount; i++) {
       final v = i < n ? values[i] : 0;
       final d = v is num ? v.toDouble() : 0.0;
       bands[i] = d.isFinite ? d.clamp(0.0, 1.0) : 0;
+      if (bands[i] > maxBand) maxBand = bands[i];
     }
+    // El pico decae a la mitad en ~0,8 s (a 20–30 fps).
+    final dtPeak = prev == null ? 0.05 : math.min(0.5, now.difference(prev).inMicroseconds / 1e6);
+    _peak = math.max(maxBand, _peak * math.pow(0.5, dtPeak / 0.8));
     if (rms > threshold) {
       _lastLoud = now;
       detected.value = true;
@@ -90,12 +117,16 @@ class CarAudioLevels {
     _lastFrame = null;
     _lastLoud = null;
     rms = 0;
+    _peak = 0;
+    _fps = 0;
+    _frames = 0;
     bands.fillRange(0, bandCount, 0);
     if (!_disposed) detected.value = false;
   }
 
   /// Nivel 0..1 de la barra [k] (0 = graves, arriba) de [half] barras por lado.
-  double level(int k, int half, {double sensitivity = 1}) => mapBands(bands, k, half, sensitivity: sensitivity);
+  double level(int k, int half, {double sensitivity = 1}) =>
+      mapBands(bands, k, half, sensitivity: sensitivity * gain);
 
   /// Reparte las [src] bandas (graves → agudos) entre [half] barras: cada barra promedia
   /// su tramo (o toma la banda más cercana si hay más barras que bandas). Aplica la

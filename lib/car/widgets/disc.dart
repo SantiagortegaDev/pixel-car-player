@@ -13,9 +13,10 @@ import 'package:pixel_car_player/core/shapes/m3_shapes.dart';
 /// mientras suena, y 44 barras tipo píldora que nacen del borde de la forma + 12 px.
 ///
 /// Las barras salen del audio real de la tableta ([audio], Visualizer de Android) cuando
-/// [realAudio]; si no, de un pseudo-espectro procedural. Siempre graves arriba, agudos
-/// abajo, reflejado izquierda/derecha, con el suavizado de Harmonix (ataque 0,35 · caída
-/// 0,12). Sin actividad bajan hasta quedar como puntos.
+/// [realAudio] (solo el FFT, sin mezclar nada procedural); si no, de un pseudo-espectro
+/// procedural. Siempre graves arriba, agudos abajo, reflejado izquierda/derecha (barra `i` y
+/// `n-1-i` = misma banda, como Harmonix), con el suavizado de Harmonix (ataque 0,35 · caída
+/// 0,12) o el de "Respuesta del visualizador". Sin actividad bajan hasta quedar como puntos.
 ///
 /// [playing] = "animar" (suena, se detectó audio o "Animar siempre"). Con [reduced] no
 /// gira ni se mueven las barras (como el modo reducido de Harmonix).
@@ -150,7 +151,10 @@ class _DiscState extends State<Disc> with SingleTickerProviderStateMixin {
     final bars = _levels.length;
     final half = bars ~/ 2;
     // El suavizado de Harmonix es por cuadro (≈60 fps); se corrige por dt y velocidad.
+    // Con el audio real, "Respuesta del visualizador" elige cuánto se suaviza (Precisa casi
+    // no suaviza: las barras siguen cada cuadro del FFT, sin nada simulado mezclado).
     final f = dt * 60 * math.sqrt(speed);
+    final (attack, release) = real ? widget.viz.response.smoothing : CarVizResponse.normal.smoothing;
     for (var i = 0; i < bars; i++) {
       final k = i < half ? i : bars - 1 - i;
       final target = !playing || !widget.showBars
@@ -158,7 +162,7 @@ class _DiscState extends State<Disc> with SingleTickerProviderStateMixin {
           : real
           ? widget.audio!.level(k, half, sensitivity: widget.viz.sensitivity)
           : _spectrum.target(k);
-      final a = target > _levels[i] ? 0.35 : 0.12;
+      final a = target > _levels[i] ? attack : release;
       _levels[i] += (target - _levels[i]) * (1 - math.pow(1 - a, f));
       if (_levels[i] > 0.004) active = true;
     }

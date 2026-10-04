@@ -23,3 +23,22 @@ class BeaconHit {
   final String address;
   final String payload;
 }
+
+/// Servidor TCP que acepta conexiones entrantes (v2: el celular marca a la tableta).
+abstract class LinkServer {
+  /// Puerto real (útil con puerto 0 en pruebas).
+  int get port;
+
+  /// Conexiones aceptadas. Termina al cerrar el servidor.
+  Stream<LinkConnection> get connections;
+
+  Future<void> close();
+}
+
+/// Socket UDP para enviar beacons (broadcast habilitado).
+abstract class UdpSender {
+  /// `false` si no se pudo enviar (red caída, sin permiso…).
+  bool send(String host, int port, String payload);
+
+  void close();
+}

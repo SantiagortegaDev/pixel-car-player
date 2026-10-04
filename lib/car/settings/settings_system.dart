@@ -65,11 +65,12 @@ class _HotspotSettingsState extends State<HotspotSettings> {
     _prefill(info);
   }
 
-  /// Si el sistema deja leer la red y el usuario no escribió nada, se completa sola.
+  /// Si el sistema deja leer la red y el usuario no escribió nada, se completa sola (con la
+  /// red configurada en el radio si se conoce; es la misma que se enciende).
   void _prefill(HotspotInfo info) {
     final cur = c.cfg.hotspot;
-    final ssid = cur.ssid.isEmpty ? info.ssid : null;
-    final pass = cur.password.isEmpty ? info.password : null;
+    final ssid = cur.ssid.isEmpty ? info.networkSsid : null;
+    final pass = cur.password.isEmpty && (ssid != null || cur.ssid == info.networkSsid) ? info.networkPassword : null;
     if (ssid == null && pass == null) return;
     _hotspotOpts(c, (x) => x.copyWith(ssid: ssid, password: pass));
     if (ssid != null) _ssid.text = ssid;
@@ -223,6 +224,19 @@ class _HotspotSettingsState extends State<HotspotSettings> {
                   value: hs.autoEnable,
                   onChanged: (v) => _hotspotOpts(c, (x) => x.copyWith(autoEnable: v)),
                 ),
+                const SettingsNote(
+                  'Se enciende la red configurada en los ajustes del radio, y solo si está apagada: si ya está '
+                  'encendida (o el radio no deja leer el estado) no se toca.',
+                  icon: Symbols.info_rounded,
+                ),
+                SettingsSwitch(
+                  label: 'Permitir hotspot temporal (red aleatoria)',
+                  description:
+                      'Avanzado. Si el radio no deja encender su hotspot, crea uno temporal con otro nombre y otra '
+                      'contraseña (cambian cada vez; el celular no se une solo). Apagado = solo la red del radio.',
+                  value: hs.allowTemporary,
+                  onChanged: (v) => _hotspotOpts(c, (x) => x.copyWith(allowTemporary: v)),
+                ),
                 if (hs.autoEnable)
                   SettingsSlider(
                     label: 'Volver a verificar cada',
@@ -243,6 +257,13 @@ class _HotspotSettingsState extends State<HotspotSettings> {
                   'Escribe el nombre y la contraseña del hotspot (se completan solos si el radio deja leerlos). '
                   'Con el QR, el celular se une apuntando la cámara.',
                 ),
+                if (info.configuredSsid != null && hs.ssid == info.configuredSsid)
+                  const SettingsStatus(
+                    key: ValueKey('hotspot-configured'),
+                    ok: true,
+                    okIcon: Symbols.settings_input_antenna_rounded,
+                    text: 'Usando la red configurada en el radio',
+                  ),
                 SettingsItem(
                   label: 'Nombre de la red (SSID)',
                   child: SettingsField(fieldKey: const ValueKey('hotspot-ssid'), controller: _ssid, hint: 'Mi carro'),
@@ -282,6 +303,14 @@ class _HotspotSettingsState extends State<HotspotSettings> {
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     child: WifiQrCard(ssid: hs.ssid, password: hs.password),
                   ),
+                SettingsSwitch(
+                  label: 'Compartir el hotspot con el celular',
+                  description:
+                      'Al conectar, la tableta le pasa el nombre y la contraseña de esta red al celular para que se '
+                      'una solo la próxima vez.',
+                  value: hs.shareWithPhone,
+                  onChanged: (v) => _hotspotOpts(c, (x) => x.copyWith(shareWithPhone: v)),
+                ),
               ],
             ),
             const SettingsSection(

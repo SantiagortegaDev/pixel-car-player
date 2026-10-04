@@ -12,6 +12,13 @@ class LinkProtocol {
   static const int version = 1;
   static const int tcpPort = 47321;
   static const int beaconPort = 47322;
+
+  /// v2: la tableta también escucha conexiones del celular en este puerto…
+  static const int carTcpPort = 47323;
+
+  /// …y avisa por UDP (`car_beacon`) a este puerto cada [carBeaconInterval].
+  static const int carBeaconPort = 47324;
+  static const Duration carBeaconInterval = Duration(seconds: 2);
   static const String rfcommUuid = '7c1e3a52-5b8e-4f0a-9d3c-2f6b8a4e91d7';
 
   /// Codifica un mensaje como línea (incluye `\n` final).
@@ -32,7 +39,29 @@ class LinkProtocol {
   }
 
   // ---- Tableta → celular ----
-  static Map<String, dynamic> hello(String device) => {'t': 'hello', 'v': version, 'device': device};
+  /// `hello` de la tableta; [id] = identificador estable de esta instalación (v2).
+  static Map<String, dynamic> hello(String device, {String? id}) => {
+    't': 'hello',
+    'v': version,
+    'device': device,
+    if (id != null && id.isNotEmpty) 'id': id,
+  };
+
+  /// Beacon UDP de la tableta (v2, puerto [carBeaconPort]).
+  static Map<String, dynamic> carBeacon({required String device, required String id, int port = carTcpPort}) => {
+    't': 'car_beacon',
+    'v': 2,
+    'device': device,
+    'id': id,
+    'port': port,
+  };
+
+  /// Tableta → celular: la red del carro, para que el celular se una solo.
+  static Map<String, dynamic> hotspot({required String ssid, required String password}) => {
+    't': 'hotspot',
+    'ssid': ssid,
+    'password': password,
+  };
   static Map<String, dynamic> pong() => {'t': 'pong'};
   static Map<String, dynamic> resync() => {'t': 'resync'};
 
@@ -125,10 +154,12 @@ sealed class LinkMessage {
   factory LinkMessage.fromJson(Map<String, dynamic> j) {
     switch (j['t']) {
       case 'hello':
+        final id = j['id'];
         return HelloMessage(
           device: (j['device'] as String?) ?? 'Celular',
           source: j['source'] as String?,
           version: (j['v'] as num?)?.toInt() ?? 1,
+          id: id is String && id.isNotEmpty ? id : null,
         );
       case 'track':
         return TrackMessage(TrackInfo.fromJson(j));
@@ -176,6 +207,13 @@ sealed class LinkMessage {
         return BeaconMessage(
           device: (j['device'] as String?) ?? 'Celular',
           port: (j['port'] as num?)?.toInt() ?? LinkProtocol.tcpPort,
+          id: j['id'] is String ? j['id'] as String : null,
+        );
+      case 'car_beacon':
+        return CarBeaconMessage(
+          device: (j['device'] as String?) ?? 'Tableta',
+          id: (j['id'] as String?) ?? '',
+          port: (j['port'] as num?)?.toInt() ?? LinkProtocol.carTcpPort,
         );
       default:
         return UnknownMessage(j['t']?.toString());
@@ -184,10 +222,13 @@ sealed class LinkMessage {
 }
 
 class HelloMessage extends LinkMessage {
-  const HelloMessage({required this.device, this.source, this.version = 1});
+  const HelloMessage({required this.device, this.source, this.version = 1, this.id});
   final String device;
   final String? source;
   final int version;
+
+  /// Identificador estable de la instalación del celular (v2; `null` en v1).
+  final String? id;
 }
 
 class TrackMessage extends LinkMessage {
@@ -246,8 +287,17 @@ class PingMessage extends LinkMessage {
 }
 
 class BeaconMessage extends LinkMessage {
-  const BeaconMessage({required this.device, required this.port});
+  const BeaconMessage({required this.device, required this.port, this.id});
   final String device;
+  final int port;
+  final String? id;
+}
+
+/// Beacon de una tableta (v2). La tableta no los usa; sirve para pruebas y diagnóstico.
+class CarBeaconMessage extends LinkMessage {
+  const CarBeaconMessage({required this.device, required this.id, required this.port});
+  final String device;
+  final String id;
   final int port;
 }
 
