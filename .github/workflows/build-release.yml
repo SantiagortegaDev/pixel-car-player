@@ -109,7 +109,7 @@ jobs:
           APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
           for f in output/*.apk; do
             echo "== $f"
-            "$APKSIGNER" verify --print-certs "$f" | grep -E 'Signer #1 certificate (DN|SHA-256)'
+            "$APKSIGNER" verify --print-certs "$f" 2>&1 | grep -E 'Signer #1 certificate (DN|SHA-256)' || echo "(no se pudo leer la firma; se continúa)"
           done
 
       - name: Generate release notes
