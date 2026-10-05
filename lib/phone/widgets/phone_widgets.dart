@@ -303,37 +303,49 @@ class TransmitCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
+                      // Cambio de estado animado: el texto viejo sale hacia arriba y
+                      // el nuevo entra desde abajo (la forma se transforma sola).
+                      _StatusText(
                         running ? 'Transmisor activo' : 'Transmisor apagado',
                         style: HxType.titleL(cs.onSurface),
                       ),
-                      Text(subtitle, style: HxType.bodyM(cs.onSurfaceVariant)),
+                      _StatusText(
+                        subtitle,
+                        style: HxType.bodyM(cs.onSurfaceVariant),
+                      ),
                     ],
                   ),
                 ),
               ],
             ),
           ),
-          if (running) ...[
-            const SizedBox(height: 14),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                HxChip(
-                  icon: Symbols.tablet_android_rounded,
-                  label: '$cars conectada${cars == 1 ? '' : 's'}',
-                  on: cars > 0,
-                ),
-                if (port != null)
-                  HxChip(
-                    icon: Symbols.lan_rounded,
-                    label: 'Puerto $port',
-                    mono: true,
+          AnimatedSize(
+            duration: HxMotion.dSpring,
+            curve: HxMotion.emphasizedDecel,
+            alignment: Alignment.topCenter,
+            child: !running
+                ? const SizedBox(width: double.infinity)
+                : Padding(
+                    padding: const EdgeInsets.only(top: 14),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        HxChip(
+                          icon: Symbols.tablet_android_rounded,
+                          label: '$cars conectada${cars == 1 ? '' : 's'}',
+                          on: cars > 0,
+                        ),
+                        if (port != null)
+                          HxChip(
+                            icon: Symbols.lan_rounded,
+                            label: 'Puerto $port',
+                            mono: true,
+                          ),
+                      ],
+                    ),
                   ),
-              ],
-            ),
-          ],
+          ),
           const SizedBox(height: 14),
           Opacity(
             opacity: enabled || running ? 1 : 0.38,
@@ -375,6 +387,36 @@ class TransmitCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Texto de estado que cambia con un deslizamiento vertical + fundido.
+class _StatusText extends StatelessWidget {
+  const _StatusText(this.text, {required this.style});
+  final String text;
+  final TextStyle style;
+
+  @override
+  Widget build(BuildContext context) => AnimatedSwitcher(
+    duration: hxReduceMotion(context) ? Duration.zero : HxMotion.dSpringFast,
+    switchInCurve: HxMotion.emphasizedDecel,
+    switchOutCurve: HxMotion.emphasizedAccel,
+    layoutBuilder: (cur, prev) =>
+        Stack(alignment: Alignment.centerLeft, children: [...prev, ?cur]),
+    transitionBuilder: (child, a) {
+      final incoming = child.key == ValueKey(text);
+      return FadeTransition(
+        opacity: a,
+        child: SlideTransition(
+          position: Tween(
+            begin: Offset(0, incoming ? 0.5 : -0.5),
+            end: Offset.zero,
+          ).animate(a),
+          child: child,
+        ),
+      );
+    },
+    child: Text(text, key: ValueKey(text), style: style),
+  );
 }
 
 /// Aviso en el inicio cuando faltan permisos.
@@ -434,21 +476,26 @@ class CarsList extends StatelessWidget {
       children: [
         for (var i = 0; i < cars.length; i++) ...[
           if (i > 0) const SizedBox(height: 2),
-          HxListRow(
-            icon: Symbols.tablet_android_rounded,
-            title: cars[i].device,
-            subtitle:
-                '${cars[i].isBluetooth ? 'Bluetooth' : 'Wi-Fi'} · ${cars[i].address}',
-            current: true,
-            trailing: SizedBox.square(
-              dimension: 40,
-              child: Center(
-                child: HxIcon(
-                  cars[i].isBluetooth
-                      ? Symbols.bluetooth_connected_rounded
-                      : Symbols.wifi_rounded,
-                  size: 22,
-                  color: cs.onSecondaryContainer,
+          HxEntrance(
+            key: ValueKey('${cars[i].address}/${cars[i].device}'),
+            index: i,
+            child: HxListRow(
+              icon: Symbols.tablet_android_rounded,
+              title: cars[i].device,
+              subtitle:
+                  '${cars[i].isBluetooth ? 'Bluetooth' : 'Wi-Fi'} · ${cars[i].address}'
+                  '${cars[i].pairing ? ' · Esperando código' : (cars[i].authenticated == false ? ' · Sin verificar' : '')}',
+              current: true,
+              trailing: SizedBox.square(
+                dimension: 40,
+                child: Center(
+                  child: HxIcon(
+                    cars[i].isBluetooth
+                        ? Symbols.bluetooth_connected_rounded
+                        : Symbols.wifi_rounded,
+                    size: 22,
+                    color: cs.onSecondaryContainer,
+                  ),
                 ),
               ),
             ),

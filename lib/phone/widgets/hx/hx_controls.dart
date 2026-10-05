@@ -76,11 +76,14 @@ class _HxButtonState extends State<HxButton> with HxPressState {
                     HxIcon(widget.icon!, size: 18, color: fg),
                     const SizedBox(width: 8),
                   ],
-                  Text(
-                    widget.label,
-                    style: HxType.labelL(fg),
-                    maxLines: 1,
-                    softWrap: false,
+                  Flexible(
+                    child: Text(
+                      widget.label,
+                      style: HxType.labelL(fg),
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                   if (widget.trailingIcon != null) ...[
                     const SizedBox(width: 8),
@@ -128,7 +131,7 @@ class _HxBigButtonState extends State<HxBigButton> with HxPressState {
       onTap: widget.onPressed == null
           ? null
           : () {
-              HapticFeedback.mediumImpact();
+              if (HxHaptics.enabled) HapticFeedback.mediumImpact();
               widget.onPressed!();
             },
       onHighlightChanged: setPressed,
@@ -277,7 +280,10 @@ class _HxSwitchRowState extends State<HxSwitchRow> with HxPressState {
         onTapDown: (_) => setPressed(true),
         onTapUp: (_) => setPressed(false),
         onTapCancel: () => setPressed(false),
-        onTap: () => widget.onChanged(!widget.value),
+        onTap: () {
+          HxHaptics.tap();
+          widget.onChanged(!widget.value);
+        },
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 12),
           child: Row(

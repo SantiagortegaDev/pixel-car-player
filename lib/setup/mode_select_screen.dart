@@ -41,7 +41,7 @@ class ModeSelectScreen extends StatelessWidget {
                     ? 57.0
                     : (wide ? 45.0 : 40.0);
 
-                final cards = [
+                final cards = <Widget>[
                   _ModeCard(
                     shapeColor: cs.primaryContainer,
                     iconColor: cs.onPrimaryContainer,
@@ -69,31 +69,42 @@ class ModeSelectScreen extends StatelessWidget {
                 final header = Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    HxShapeTile(
-                      shape: M3Shape.cookie9,
-                      size: tile,
-                      color: cs.primaryContainer,
-                      icon: Symbols.directions_car_rounded,
-                      iconColor: cs.onPrimaryContainer,
-                      iconSize: tile * 0.43,
-                      spin: true,
+                    // Entrada: la forma crece y se transforma, luego el título, el
+                    // texto y las tarjetas en cascada.
+                    HxEntrance(
+                      scale: true,
+                      offset: 0,
+                      duration: const Duration(milliseconds: 600),
+                      child: _MorphInTile(
+                        size: tile,
+                        color: cs.primaryContainer,
+                        iconColor: cs.onPrimaryContainer,
+                      ),
                     ),
                     SizedBox(height: compact ? 16 : 24),
-                    Text(
-                      'Pixel Car Player',
-                      style: HxType.greeting(titleSize, cs.onSurface),
-                      textAlign: TextAlign.center,
+                    HxEntrance(
+                      index: 2,
+                      child: Text(
+                        'Pixel Car Player',
+                        style: HxType.greeting(titleSize, cs.onSurface),
+                        textAlign: TextAlign.center,
+                      ),
                     ),
                     const SizedBox(height: 10),
-                    Text(
-                      '¿Qué será este dispositivo? Puedes cambiarlo después '
-                      'desde el menú.',
-                      style: HxType.bodyL(cs.onSurfaceVariant),
-                      textAlign: TextAlign.center,
+                    HxEntrance(
+                      index: 3,
+                      child: Text(
+                        '¿Qué será este dispositivo? Puedes cambiarlo después '
+                        'desde el menú.',
+                        style: HxType.bodyL(cs.onSurfaceVariant),
+                        textAlign: TextAlign.center,
+                      ),
                     ),
                   ],
                 );
 
+                cards[0] = HxEntrance(index: 5, offset: 40, child: cards[0]);
+                cards[1] = HxEntrance(index: 7, offset: 40, child: cards[1]);
                 final body = wide
                     ? IntrinsicHeight(
                         child: Row(
@@ -147,6 +158,46 @@ class ModeSelectScreen extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Forma del encabezado: entra como cookie4 y se transforma en cookie9 mientras gira.
+class _MorphInTile extends StatelessWidget {
+  const _MorphInTile({
+    required this.size,
+    required this.color,
+    required this.iconColor,
+  });
+  final double size;
+  final Color color;
+  final Color iconColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduce = hxReduceMotion(context);
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: reduce ? 1 : 0, end: 1),
+      duration: const Duration(milliseconds: 900),
+      curve: HxMotion.emphasizedDecel,
+      builder: (context, t, child) => Transform.rotate(
+        angle: (t - 1) * 1.2,
+        child: ClipPath(
+          clipper: M3ShapeClipper(
+            M3Shape.lerp(M3Shape.cookie4, M3Shape.cookie9, t),
+          ),
+          child: child,
+        ),
+      ),
+      child: HxShapeTile(
+        shape: M3Shape.cookie9,
+        size: size,
+        color: color,
+        icon: Symbols.directions_car_rounded,
+        iconColor: iconColor,
+        iconSize: size * 0.43,
+        spin: true,
       ),
     );
   }

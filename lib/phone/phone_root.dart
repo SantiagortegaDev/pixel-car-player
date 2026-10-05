@@ -1,29 +1,52 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:pixel_car_player/core/theme/app_theme.dart';
 import 'package:pixel_car_player/phone/phone_controller.dart';
+import 'package:pixel_car_player/phone/widgets/appearance_section.dart';
+import 'package:pixel_car_player/phone/widgets/auto_start_section.dart';
 import 'package:pixel_car_player/phone/widgets/hotspot_card.dart';
 import 'package:pixel_car_player/phone/widgets/hx/hx.dart';
 import 'package:pixel_car_player/phone/widgets/link_diagnostics_card.dart';
+import 'package:pixel_car_player/phone/widgets/pairing_dialog.dart';
+import 'package:pixel_car_player/phone/widgets/pairing_section.dart';
 import 'package:pixel_car_player/phone/widgets/phone_widgets.dart';
+import 'package:pixel_car_player/phone/widgets/updates_section.dart';
 
 /// Raíz del modo celular (transmisor), con el aspecto de Harmonix v2: barra de
 /// navegación abajo (riel a la izquierda en pantallas anchas), inicio con píldora
 /// superior y saludo grande, y Ajustes en tarjetas.
 class PhoneRoot extends StatefulWidget {
-  const PhoneRoot({super.key, required this.onChangeMode, this.now});
+  const PhoneRoot({
+    super.key,
+    required this.onChangeMode,
+    this.now,
+    this.controller,
+    this.splash = true,
+  });
   final VoidCallback onChangeMode;
 
   /// Hora para el saludo (por defecto, la actual).
   final DateTime Function()? now;
 
+  /// Controlador a usar (pruebas: para inyectar eventos nativos). Si se pasa, quien lo
+  /// creó lo libera.
+  final PhoneController? controller;
+
+  /// Pantalla de arranque con la cookie que se transforma.
+  final bool splash;
+
   @override
   State<PhoneRoot> createState() => _PhoneRootState();
 }
 
-class _PhoneRootState extends State<PhoneRoot> {
-  final _c = PhoneController();
+class _PhoneRootState extends State<PhoneRoot> with WidgetsBindingObserver {
+  late final PhoneController _c = widget.controller ?? PhoneController();
+  late final bool _owns = widget.controller == null;
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
   int _tab = 0;
+  bool _pairOpen = false;
+  bool _themeSettled = false;
 
   static const _items = [
     HxNavItem(Symbols.home_rounded, 'Inicio'),
@@ -34,47 +57,125 @@ class _PhoneRootState extends State<PhoneRoot> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _c.pairing.addListener(_onPairing);
     _c.init();
   }
 
   @override
   void dispose() {
-    _c.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    _c.pairing.removeListener(_onPairing);
+    if (_owns) _c.dispose();
     super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) {
-    final scheme = AppTheme.schemeFromSeed(
-      AppTheme.fallbackSeed,
-      brightness: MediaQuery.platformBrightnessOf(context),
-    );
-    return HxAnimatedTheme(
-      scheme: scheme,
-      child: ListenableBuilder(
-        listenable: _c,
-        builder: (context, _) => _shell(context),
-      ),
-    );
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Si el pedido llegó con la app en segundo plano (el nativo avisó con una
+    // notificación), se muestra al volver mientras siga vigente.
+    if (state == AppLifecycleState.resumed) _onPairing();
   }
+
+  void _onPairing() {
+    if (_pairOpen || !_c.pairing.hasPending) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showPairing());
+  }
+
+  Future<void> _showPairing() async {
+    if (!mounted || _pairOpen || !_c.pairing.hasPending) return;
+    final life = WidgetsBinding.instance.lifecycleState;
+    if (life != null && life != AppLifecycleState.resumed) return;
+    // Aún en la pantalla de arranque: se reintenta al construir el contenido.
+    final ctx = _scaffoldKey.currentContext;
+    if (ctx == null) return;
+    _pairOpen = true;
+    final name = _c.pairing.pending?.carName ?? 'el carro';
+    final ok = await showPairingDialog(ctx, _c.pairing);
+    _pairOpen = false;
+    if (!mounted) return;
+    final sctx = _scaffoldKey.currentContext;
+    if (ok && sctx != null && sctx.mounted) {
+      showHxSnack(
+        sctx,
+        'Emparejado con «${_c.pairing.lastPairedName ?? name}»',
+      );
+    }
+    // Pudo llegar otro pedido mientras se cerraba.
+    _onPairing();
+  }
+
+  void _setTab(int i) {
+    if (i != _tab) setState(() => _tab = i);
+  }
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: _c.settings,
+    builder: (context, _) {
+      final s = _c.settings;
+      final mq = MediaQuery.of(context);
+      final reduce = s.reduceMotion(mq.disableAnimations);
+      final scheme = s.scheme(mq.platformBrightness);
+      // Al cargar las preferencias el tema se aplica sin transición (lo tapa la
+      // pantalla de arranque); después, los cambios se animan como en Harmonix.
+      final instant = reduce || !_themeSettled;
+      if (s.loaded && !_themeSettled) {
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => _themeSettled = true,
+        );
+      }
+      final textScaler = s.textScale == 1
+          ? mq.textScaler
+          : TextScaler.linear(mq.textScaler.scale(16) / 16 * s.textScale);
+      final dark = scheme.brightness == Brightness.dark;
+      return MediaQuery(
+        data: mq.copyWith(disableAnimations: reduce, textScaler: textScaler),
+        child: AnnotatedRegion<SystemUiOverlayStyle>(
+          value: (dark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
+              .copyWith(
+                statusBarColor: Colors.transparent,
+                systemNavigationBarColor: Colors.transparent,
+              ),
+          child: HxAnimatedTheme(
+            scheme: scheme,
+            duration: instant ? Duration.zero : HxMotion.dTheme,
+            child: HxSplash(
+              enabled: widget.splash,
+              child: ListenableBuilder(
+                listenable: Listenable.merge([_c, _c.pairing]),
+                builder: (context, _) => _shell(context),
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
 
   Widget _shell(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final playing = _c.status.session?.playing == true;
-    final view = KeyedSubtree(
-      key: ValueKey(_tab),
-      child: switch (_tab) {
-        0 => _HomeView(
-          c: _c,
-          greeting: greetingFor((widget.now ?? DateTime.now)()),
-          onChangeMode: widget.onChangeMode,
-          onReviewPermissions: () => setState(() => _tab = 2),
-        ),
-        1 => _ConnectionView(c: _c),
-        _ => _SettingsView(c: _c, onChangeMode: widget.onChangeMode),
-      },
+    if (_c.pairing.hasPending && !_pairOpen) _onPairing();
+    final view = HxSharedAxisSwitcher(
+      index: _tab,
+      child: KeyedSubtree(
+        key: ValueKey(_tab),
+        child: switch (_tab) {
+          0 => _HomeView(
+            c: _c,
+            greeting: greetingFor((widget.now ?? DateTime.now)()),
+            onChangeMode: widget.onChangeMode,
+            onReviewPermissions: () => _setTab(2),
+            onOpenUpdates: () => _setTab(2),
+          ),
+          1 => _ConnectionView(c: _c),
+          _ => _SettingsView(c: _c, onChangeMode: widget.onChangeMode),
+        },
+      ),
     );
     return Scaffold(
+      key: _scaffoldKey,
       backgroundColor: cs.surface,
       body: LayoutBuilder(
         builder: (context, box) {
@@ -82,11 +183,7 @@ class _PhoneRootState extends State<PhoneRoot> {
             return Column(
               children: [
                 Expanded(child: view),
-                HxNavBar(
-                  items: _items,
-                  index: _tab,
-                  onChanged: (i) => setState(() => _tab = i),
-                ),
+                HxNavBar(items: _items, index: _tab, onChanged: _setTab),
               ],
             );
           }
@@ -99,7 +196,7 @@ class _PhoneRootState extends State<PhoneRoot> {
                   items: _items,
                   index: _tab,
                   playing: playing,
-                  onChanged: (i) => setState(() => _tab = i),
+                  onChanged: _setTab,
                 ),
                 Expanded(
                   child: Container(
@@ -145,7 +242,11 @@ class _View extends StatelessWidget {
               constraints: BoxConstraints(maxWidth: maxWidth),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: children,
+                children: [
+                  // Entrada escalonada de títulos y tarjetas al abrir cada pestaña.
+                  for (var i = 0; i < children.length; i++)
+                    HxEntrance(index: i, child: children[i]),
+                ],
               ),
             ),
           ),
@@ -161,11 +262,13 @@ class _HomeView extends StatelessWidget {
     required this.greeting,
     required this.onChangeMode,
     required this.onReviewPermissions,
+    required this.onOpenUpdates,
   });
   final PhoneController c;
   final String greeting;
   final VoidCallback onChangeMode;
   final VoidCallback onReviewPermissions;
+  final VoidCallback onOpenUpdates;
 
   @override
   Widget build(BuildContext context) {
@@ -202,6 +305,7 @@ class _HomeView extends StatelessWidget {
             style: HxType.greeting((w * 0.05).clamp(36.0, 57.0), cs.onSurface),
           ),
         ),
+        UpdateBanner(c: c.updates, onOpen: onOpenUpdates),
         if (!c.permissionsOk || !c.runtimeOk) ...[
           PermissionsBanner(onReview: onReviewPermissions),
           const SizedBox(height: 28),
@@ -346,7 +450,10 @@ class _ConnectionView extends StatelessWidget {
       const HxSectionTitle('Cómo conectar', icon: Symbols.help_rounded),
       HelpItems(ips: c.localIps, port: c.status.port),
       const SizedBox(height: 24),
-      const HxSectionTitle('Hotspot del carro', icon: Symbols.wifi_tethering_rounded),
+      const HxSectionTitle(
+        'Hotspot del carro',
+        icon: Symbols.wifi_tethering_rounded,
+      ),
       HotspotCard(c: c),
       const SizedBox(height: 24),
       const HxSectionTitle(
@@ -397,6 +504,30 @@ class _SettingsView extends StatelessWidget {
           ),
         ],
       ),
+      const SizedBox(height: 24),
+      const HxSectionTitle(
+        'Encendido automático',
+        icon: Symbols.battery_charging_full_rounded,
+      ),
+      AutoStartSection(c: c),
+      const SizedBox(height: 24),
+      const HxSectionTitle('Seguridad', icon: Symbols.lock_rounded),
+      PairingSection(c: c.pairing),
+      const SizedBox(height: 24),
+      const HxSectionTitle('Apariencia', icon: Symbols.palette_rounded),
+      AppearanceSection(s: c.settings),
+      const SizedBox(height: 24),
+      const HxSectionTitle(
+        'Actualizaciones',
+        icon: Symbols.system_update_rounded,
+      ),
+      UpdatesSection(c: c.updates),
+      const SizedBox(height: 24),
+      const HxSectionTitle(
+        'Copia de seguridad',
+        icon: Symbols.settings_backup_restore_rounded,
+      ),
+      BackupSection(c: c),
       const SizedBox(height: 24),
       const HxSectionTitle('Permisos', icon: Symbols.verified_user_rounded),
       HxSettingsCard(children: permissionItems(c)),

@@ -39,11 +39,26 @@ class HxShapeTile extends StatefulWidget {
 }
 
 class _HxShapeTileState extends State<HxShapeTile>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 24),
   );
+
+  /// Transformación de forma cuando cambia [HxShapeTile.shape] (p. ej. transmisor
+  /// apagado → encendido): resorte sin rebote, como `shapeMorph` de Harmonix.
+  late final AnimationController _morph = AnimationController(
+    vsync: this,
+    duration: HxMotion.dSpring,
+    value: 1,
+  );
+  late M3Shape _from = widget.shape;
+
+  M3Shape get _shape {
+    final k = HxMotion.spring.transform(_morph.value);
+    if (k >= 1 || identical(_from, widget.shape)) return widget.shape;
+    return M3Shape.lerp(_from, widget.shape, k);
+  }
 
   void _sync() {
     final run = widget.spin && !_reduceMotion(context);
@@ -63,37 +78,66 @@ class _HxShapeTileState extends State<HxShapeTile>
   @override
   void didUpdateWidget(HxShapeTile old) {
     super.didUpdateWidget(old);
+    if (!identical(old.shape, widget.shape)) {
+      if (_reduceMotion(context)) {
+        _from = widget.shape;
+        _morph.value = 1;
+      } else {
+        // Arranca desde lo que se ve ahora (por si cambia a mitad de camino).
+        final k = HxMotion.spring.transform(_morph.value);
+        _from = k >= 1 ? old.shape : M3Shape.lerp(_from, old.shape, k);
+        _morph.forward(from: 0);
+      }
+    }
     _sync();
   }
 
   @override
   void dispose() {
     _c.dispose();
+    _morph.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final content =
+    final reduce = _reduceMotion(context);
+    final Widget content =
         widget.child ??
         (widget.icon == null
             ? const SizedBox.shrink()
-            : HxIcon(
-                widget.icon!,
-                size: widget.iconSize ?? widget.size * 0.43,
-                color: widget.iconColor,
-                filled: widget.filled,
+            : AnimatedSwitcher(
+                duration: reduce ? Duration.zero : HxMotion.dSpringFast,
+                switchInCurve: HxMotion.emphasizedDecel,
+                switchOutCurve: HxMotion.emphasizedAccel,
+                transitionBuilder: (child, a) => FadeTransition(
+                  opacity: a,
+                  child: ScaleTransition(
+                    scale: Tween(begin: 0.6, end: 1.0).animate(a),
+                    child: child,
+                  ),
+                ),
+                child: HxIcon(
+                  widget.icon!,
+                  key: ValueKey(widget.icon),
+                  size: widget.iconSize ?? widget.size * 0.43,
+                  color: widget.iconColor,
+                  filled: widget.filled,
+                ),
               ));
     return SizedBox.square(
       dimension: widget.size,
-      child: AnimatedBuilder(
-        animation: _c,
-        builder: (context, child) => ClipPath(
-          clipper: M3ShapeClipper(
-            widget.shape,
-            rotation: _c.value * math.pi * 2,
+      child: TweenAnimationBuilder<Color?>(
+        tween: ColorTween(end: widget.color),
+        duration: reduce ? Duration.zero : HxMotion.dFxSlow,
+        curve: HxMotion.standard,
+        builder: (context, color, child) => AnimatedBuilder(
+          animation: Listenable.merge([_c, _morph]),
+          builder: (context, child) => ClipPath(
+            clipper: M3ShapeClipper(_shape, rotation: _c.value * math.pi * 2),
+            child: ColoredBox(color: color ?? widget.color, child: child),
           ),
-          child: ColoredBox(color: widget.color, child: child),
+          child: child,
         ),
         child: Center(child: content),
       ),

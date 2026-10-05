@@ -400,7 +400,9 @@ class HxStatus extends StatelessWidget {
       children: [
         HxIcon(icon, size: 18, color: c, filled: true),
         const SizedBox(width: 6),
-        Text(label, style: HxType.labelL(c)),
+        Flexible(
+          child: Text(label, style: HxType.labelL(c), overflow: TextOverflow.ellipsis),
+        ),
       ],
     );
   }

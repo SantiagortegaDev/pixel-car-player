@@ -128,6 +128,7 @@ void main() {
       final calls = <String>[];
       final hang = Completer<LinkConnection?>();
       final c = CarLinkClient(
+      trust: CarTrustStore(requirePairing: false),
         listen: false,
         discovery: false,
         installId: 'car1',
@@ -155,6 +156,7 @@ void main() {
     test('la carrera tiene tope: si todo cuelga se vuelve a intentar', () async {
       var n = 0;
       final c = CarLinkClient(
+      trust: CarTrustStore(requirePairing: false),
         listen: false,
         discovery: false,
         installId: 'car1',
@@ -174,6 +176,7 @@ void main() {
 
     test('los fallos quedan en el diagnóstico con su error', () async {
       final c = CarLinkClient(
+      trust: CarTrustStore(requirePairing: false),
         listen: false,
         discovery: false,
         installId: 'car1',
@@ -195,6 +198,7 @@ void main() {
 
   group('loopback real', () {
     CarLinkClient listening({Duration spare = const Duration(seconds: 6)}) => CarLinkClient(
+      trust: CarTrustStore(requirePairing: false),
       listenPort: 0,
       discovery: false,
       useWifi: false,
@@ -257,6 +261,7 @@ void main() {
       final accepted = Completer<_FakePhone>();
       server.listen((s) => accepted.complete(_FakePhone(s)));
       final car = CarLinkClient(
+      trust: CarTrustStore(requirePairing: false),
         listen: false,
         discovery: false,
         installId: 'car-id-2',

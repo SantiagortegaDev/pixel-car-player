@@ -191,6 +191,14 @@ class DemoSource {
   Timer? _timer;
   final Map<String, Uint8List> _artCache = {};
 
+  // v3: aleatorio / repetir / me gusta.
+  bool _shuffle = false;
+  RepeatMode _repeat = RepeatMode.off;
+  final Set<String> _liked = {'demo-road'};
+
+  bool get shuffle => _shuffle;
+  RepeatMode get repeat => _repeat;
+
   DemoTrack get current => demoTracks[_index];
 
   Duration get position {
@@ -207,7 +215,13 @@ class DemoSource {
   int _sinceState = 0;
   void _tick() {
     if (_playing && position >= current.info.duration) {
-      _go(1);
+      if (_repeat == RepeatMode.one) {
+        _offset = Duration.zero;
+        _since = DateTime.now();
+        _emitState();
+      } else {
+        _go(1);
+      }
       return;
     }
     // Como el celular real: `state` cada 5 s mientras suena.
@@ -216,7 +230,47 @@ class DemoSource {
 
   void _emitState() {
     _sinceState = 0;
-    _out.add(StateMessage(playing: _playing, position: position));
+    if (_out.isClosed) return;
+    _out.add(
+      StateMessage(
+        playing: _playing,
+        position: position,
+        shuffle: _shuffle,
+        repeat: _repeat,
+        liked: _liked.contains(current.info.id),
+        canLike: true,
+        canShuffle: true,
+        canRepeat: true,
+      ),
+    );
+  }
+
+  /// Cola con `id` (v3) y miniaturas de las carátulas ya cargadas.
+  List<QueueItem> _queueItems() {
+    final n = demoTracks.length;
+    return [
+      for (var k = 1; k < n; k++)
+        QueueItem(
+          title: demoTracks[(_index + k) % n].info.title,
+          artist: demoTracks[(_index + k) % n].info.artist,
+          id: (_index + k) % n,
+          art: _artCache[demoTracks[(_index + k) % n].coverAsset],
+        ),
+      for (final (i, e) in demoQueueExtras.indexed)
+        QueueItem(title: e.title, artist: e.artist, id: 100 + i, art: _artCache[demoTracks[(i + 1) % n].coverAsset]),
+    ];
+  }
+
+  Future<void> _loadCovers() async {
+    var any = false;
+    for (final t in demoTracks) {
+      if (_artCache.containsKey(t.coverAsset)) continue;
+      try {
+        _artCache[t.coverAsset] = (await rootBundle.load(t.coverAsset)).buffer.asUint8List();
+        any = true;
+      } catch (_) {}
+    }
+    if (any && !_out.isClosed) _out.add(QueueMessage(_queueItems()));
   }
 
   Future<void> _emitTrack() async {
@@ -224,16 +278,8 @@ class DemoSource {
     _out.add(TrackMessage(t.info));
     _emitState();
     _out.add(LyricsMessage(id: t.info.id, status: LyricsStatus.loading));
-    _out.add(
-      QueueMessage([
-        for (var k = 1; k < demoTracks.length; k++)
-          QueueItem(
-            title: demoTracks[(_index + k) % demoTracks.length].info.title,
-            artist: demoTracks[(_index + k) % demoTracks.length].info.artist,
-          ),
-        ...demoQueueExtras,
-      ]),
-    );
+    _out.add(QueueMessage(_queueItems()));
+    unawaited(_loadCovers());
     try {
       final bytes = _artCache[t.coverAsset] ??= (await rootBundle.load(t.coverAsset)).buffer.asUint8List();
       if (current.info.id == t.info.id) {
@@ -255,8 +301,23 @@ class DemoSource {
     _emitTrack();
   }
 
-  void command(LinkAction action, {int? positionMs}) {
+  void command(LinkAction action, {int? positionMs, int? queueId}) {
     switch (action) {
+      case LinkAction.shuffle:
+        _shuffle = !_shuffle;
+        _emitState();
+      case LinkAction.repeat:
+        _repeat = _repeat.next;
+        _emitState();
+      case LinkAction.like:
+        final id = current.info.id;
+        if (!_liked.remove(id)) _liked.add(id);
+        _emitState();
+      case LinkAction.skipToQueue:
+        final q = queueId ?? -1;
+        final target = q >= 100 ? (q - 100 + 1) % demoTracks.length : q;
+        if (target < 0 || target >= demoTracks.length) return;
+        _go(target - _index);
       case LinkAction.play:
         _setPlaying(true);
       case LinkAction.pause:

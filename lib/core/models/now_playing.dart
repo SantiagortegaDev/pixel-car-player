@@ -63,6 +63,59 @@ class TrackInfo {
       };
 }
 
+/// Modo de repetición del reproductor del celular (`state.repeat`).
+enum RepeatMode {
+  off,
+  all,
+  one;
+
+  static RepeatMode? parse(Object? v) => switch (v) {
+    'off' => RepeatMode.off,
+    'all' => RepeatMode.all,
+    'one' => RepeatMode.one,
+    _ => null,
+  };
+
+  /// El que sigue en el ciclo off → all → one.
+  RepeatMode get next => RepeatMode.values[(index + 1) % RepeatMode.values.length];
+}
+
+/// Aleatorio / repetir / me gusta y qué se puede cambiar (v3, `state`). `null` = no se sabe
+/// (celular viejo o sesión local).
+class PlayerModes {
+  const PlayerModes({this.shuffle, this.repeat, this.liked, this.canLike, this.canShuffle, this.canRepeat});
+  final bool? shuffle;
+  final RepeatMode? repeat;
+  final bool? liked;
+  final bool? canLike;
+  final bool? canShuffle;
+  final bool? canRepeat;
+
+  static const unknown = PlayerModes();
+
+  PlayerModes copyWith({bool? shuffle, RepeatMode? repeat, bool? liked}) => PlayerModes(
+        shuffle: shuffle ?? this.shuffle,
+        repeat: repeat ?? this.repeat,
+        liked: liked ?? this.liked,
+        canLike: canLike,
+        canShuffle: canShuffle,
+        canRepeat: canRepeat,
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      other is PlayerModes &&
+      other.shuffle == shuffle &&
+      other.repeat == repeat &&
+      other.liked == liked &&
+      other.canLike == canLike &&
+      other.canShuffle == canShuffle &&
+      other.canRepeat == canRepeat;
+
+  @override
+  int get hashCode => Object.hash(shuffle, repeat, liked, canLike, canShuffle, canRepeat);
+}
+
 /// Estado completo que muestra la pantalla del carro.
 class NowPlaying {
   const NowPlaying({
@@ -75,6 +128,7 @@ class NowPlaying {
     this.lyrics = const [],
     this.lyricsSynced = false,
     this.lyricsStatus = LyricsStatus.none,
+    this.modes = PlayerModes.unknown,
   });
 
   final TrackInfo? track;
@@ -89,6 +143,9 @@ class NowPlaying {
   final List<LyricLine> lyrics;
   final bool lyricsSynced;
   final LyricsStatus lyricsStatus;
+
+  /// Aleatorio / repetir / me gusta (v3).
+  final PlayerModes modes;
 
   /// Posición interpolada "ahora".
   Duration livePosition([DateTime? now]) {
@@ -128,6 +185,7 @@ class NowPlaying {
     List<LyricLine>? lyrics,
     bool? lyricsSynced,
     LyricsStatus? lyricsStatus,
+    PlayerModes? modes,
   }) =>
       NowPlaying(
         track: identical(track, _unset) ? this.track : track as TrackInfo?,
@@ -139,5 +197,6 @@ class NowPlaying {
         lyrics: lyrics ?? this.lyrics,
         lyricsSynced: lyricsSynced ?? this.lyricsSynced,
         lyricsStatus: lyricsStatus ?? this.lyricsStatus,
+        modes: modes ?? this.modes,
       );
 }

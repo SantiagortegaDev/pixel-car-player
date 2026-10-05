@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'dart:math' as math;
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
@@ -7,6 +9,7 @@ import 'package:pixel_car_player/car/car_controller.dart';
 import 'package:pixel_car_player/car/custom/car_custom_scope.dart';
 import 'package:pixel_car_player/car/custom/car_customization.dart';
 import 'package:pixel_car_player/car/settings/hotspot_help.dart';
+import 'package:pixel_car_player/car/system/car_connectivity.dart';
 import 'package:pixel_car_player/car/system/car_hotspot.dart';
 import 'package:pixel_car_player/car/widgets/background_shapes.dart';
 import 'package:pixel_car_player/car/widgets/controls.dart';
@@ -14,7 +17,11 @@ import 'package:pixel_car_player/car/widgets/disc.dart';
 import 'package:pixel_car_player/car/widgets/hx.dart';
 import 'package:pixel_car_player/car/widgets/idle_view.dart';
 import 'package:pixel_car_player/car/widgets/lyrics.dart';
+import 'package:pixel_car_player/car/widgets/motion.dart';
+import 'package:pixel_car_player/car/widgets/pairing_dialog.dart';
 import 'package:pixel_car_player/car/widgets/queue_list.dart';
+import 'package:pixel_car_player/car/widgets/splash.dart';
+import 'package:pixel_car_player/car/widgets/standby.dart';
 import 'package:pixel_car_player/car/widgets/wavy_slider.dart';
 import 'package:pixel_car_player/core/models/now_playing.dart';
 import 'package:pixel_car_player/core/theme/app_theme.dart';
@@ -81,6 +88,9 @@ class CarPlayerScreen extends StatefulWidget {
     required this.onSettings,
     this.initialLyricsFullscreen = false,
     this.preview = false,
+    this.splash = false,
+    this.splashHoldAt,
+    this.onUpdates,
   });
 
   /// Abre los ajustes. Recibe un `context` que ya tiene el tema de la carátula.
@@ -89,6 +99,15 @@ class CarPlayerScreen extends StatefulWidget {
 
   /// Vista previa dentro de Configuración (sin gestos).
   final bool preview;
+
+  /// Animación de inicio (solo al abrir la app).
+  final bool splash;
+
+  /// Congela la animación de inicio (capturas).
+  final double? splashHoldAt;
+
+  /// Abre Configuración → Actualizaciones (aviso de versión nueva).
+  final void Function(BuildContext themedContext)? onUpdates;
 
   @override
   State<CarPlayerScreen> createState() => _CarPlayerScreenState();
@@ -99,6 +118,9 @@ class _CarPlayerScreenState extends State<CarPlayerScreen> {
   String _tab = 'lyrics';
   CarHotspot? _hotspot;
   BuildContext? _themed;
+  late bool _splash = widget.splash;
+  CarController? _ctrl;
+  bool _pairingOpen = false;
 
   void _toggleLyrics() => setState(() => _lyricsFullscreen = !_lyricsFullscreen);
 
@@ -106,17 +128,38 @@ class _CarPlayerScreenState extends State<CarPlayerScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (widget.preview) return;
-    final h = context.read<CarController>().hotspot;
+    final c = context.read<CarController>();
+    final h = c.hotspot;
     if (!identical(h, _hotspot)) {
       _hotspot?.prompt.removeListener(_onHotspotPrompt);
       _hotspot = h..prompt.addListener(_onHotspotPrompt);
+    }
+    if (!identical(c, _ctrl)) {
+      _ctrl?.link.pairing.removeListener(_onPairing);
+      _ctrl = c..link.pairing.addListener(_onPairing);
+      if (c.link.pairing.value != null) WidgetsBinding.instance.addPostFrameCallback((_) => _onPairing());
     }
   }
 
   @override
   void dispose() {
     _hotspot?.prompt.removeListener(_onHotspotPrompt);
+    _ctrl?.link.pairing.removeListener(_onPairing);
     super.dispose();
+  }
+
+  /// El celular pidió emparejar: el código en grande (encima de todo, también de Configuración).
+  void _onPairing() {
+    final c = _ctrl;
+    final ctx = _themed;
+    if (c == null || ctx == null || !mounted || _pairingOpen || c.link.pairing.value == null) return;
+    _pairingOpen = true;
+    showPairingDialog(
+      ctx,
+      pairing: c.link.pairing,
+      onCancel: c.link.cancelPairing,
+      reduced: carReducedMotion(ctx, c.cfg),
+    ).whenComplete(() => _pairingOpen = false);
   }
 
   /// No se pudo encender el hotspot solo: diálogo con el atajo a los ajustes.
@@ -134,12 +177,15 @@ class _CarPlayerScreenState extends State<CarPlayerScreen> {
     final ctrl = context.watch<CarController>();
     final cfg = ctrl.cfg;
     final reduced = carReducedMotion(context, cfg);
+    final low = ctrl.performance.low;
     return CarCustomScope(
       value: cfg,
       child: HxAnimatedTheme(
         scheme: ctrl.schemeFor(MediaQuery.platformBrightnessOf(context)),
         duration: reduced ? Duration.zero : HxMotion.dTheme,
-        child: Builder(
+        child: CarFontTheme(
+          font: cfg.style.font,
+          child: Builder(
           builder: (themed) {
             _themed = themed;
             if (_hotspot?.prompt.value != null) {
@@ -149,27 +195,42 @@ class _CarPlayerScreenState extends State<CarPlayerScreen> {
             final np = ctrl.nowPlaying;
             final hasTrack = np.track != null;
             final fullscreen = _lyricsFullscreen && hasTrack;
-            final mode = !hasTrack ? 'idle' : (fullscreen ? 'lyrics' : 'player');
+            final mode = ctrl.standby ? 'standby' : (!hasTrack ? 'idle' : (fullscreen ? 'lyrics' : 'player'));
             void openSettings() => widget.onSettings(themed);
-            final showHeader = cfg.show(CarElement.header) || mode == 'lyrics';
+            final showHeader = mode != 'standby' && (cfg.show(CarElement.header) || mode == 'lyrics');
+            final headerH = showHeader ? cfg.style.headerHeight : 0.0;
+            final entrance = cfg.anim.entrance && !widget.preview;
             return Scaffold(
               backgroundColor: cs.surface,
               body: CarScaler(
                 uiScale: cfg.design.uiScale,
                 builder: (context, size) {
                   final w = size.width;
+                  final bg = cfg.style.background;
+                  final shapes = mode != 'standby' &&
+                      bg == CarBackground.shapes &&
+                      cfg.show(CarElement.backgroundShapes) &&
+                      cfg.design.shapesCount > 0;
                   return Stack(
                     fit: StackFit.expand,
                     children: [
-                      if (cfg.show(CarElement.backgroundShapes) && cfg.design.shapesCount > 0)
+                      if (mode != 'standby' && bg != CarBackground.shapes && bg != CarBackground.solid)
+                        RepaintBoundary(
+                          child: _Backdrop(kind: bg, artwork: np.artwork, low: low, reduced: reduced),
+                        ),
+                      if (shapes)
                         BackgroundShapes(
                           playing: ctrl.visualActive,
                           reduced: reduced,
-                          count: cfg.design.shapesCount,
+                          count: low ? (cfg.design.shapesCount / 2).ceil() : cfg.design.shapesCount,
                           opacity: cfg.design.shapesOpacity,
                           animate: cfg.design.shapesAnimate,
                           minSize: w < 700 ? 36 : 56,
                           maxSize: w < 700 ? 124 : 220,
+                        ),
+                      if (mode != 'standby' && cfg.style.backgroundDim > 0)
+                        IgnorePointer(
+                          child: ColoredBox(color: Colors.black.withValues(alpha: cfg.style.backgroundDim)),
                         ),
                       // Mantener presionado cualquier parte vacía del fondo = Configuración.
                       if (!widget.preview)
@@ -184,19 +245,31 @@ class _CarPlayerScreenState extends State<CarPlayerScreen> {
                         child: Column(
                           children: [
                             if (showHeader)
-                              _Header(
-                                mode: mode,
-                                cfg: cfg,
-                                status: ctrl.displayStatus,
-                                demo: ctrl.demo,
-                                onLeft: hasTrack ? _toggleLyrics : null,
-                                onSettings: openSettings,
+                              HxEntrance(
+                                index: 0,
+                                enabled: entrance,
+                                offset: -12,
+                                child: _Header(
+                                  mode: mode,
+                                  cfg: cfg,
+                                  status: ctrl.displayStatus,
+                                  demo: ctrl.demo,
+                                  connectivity: ctrl.connectivity,
+                                  onLeft: hasTrack ? _toggleLyrics : null,
+                                  onSettings: openSettings,
+                                ),
                               ),
                             Expanded(
-                              child: HxTextIn(
-                                key: ValueKey(mode),
-                                offset: 0,
+                              child: CarScreenSwitcher(
+                                screenKey: ValueKey(mode),
+                                reduced: reduced,
                                 child: switch (mode) {
+                                  'standby' => CarStandbyView(
+                                    onWake: ctrl.wakeFromStandby,
+                                    last: ctrl.lastPlayed,
+                                    reduced: reduced,
+                                    lowPerf: low,
+                                  ),
                                   'idle' => CarIdleView(
                                     status: ctrl.displayStatus,
                                     ips: ctrl.tabletIps,
@@ -208,18 +281,19 @@ class _CarPlayerScreenState extends State<CarPlayerScreen> {
                                     ctrl: ctrl,
                                     np: np,
                                     size: size,
-                                    headerH: showHeader ? 60 : 0,
+                                    headerH: headerH,
                                     reduced: reduced,
                                   ),
                                   _ => _Stage(
                                     ctrl: ctrl,
                                     np: np,
                                     size: size,
-                                    headerH: showHeader ? 60 : 0,
+                                    headerH: headerH,
                                     tab: _tab,
                                     onTab: (t) => setState(() => _tab = t),
                                     onFullscreen: _toggleLyrics,
                                     reduced: reduced,
+                                    entrance: entrance,
                                   ),
                                 },
                               ),
@@ -227,6 +301,27 @@ class _CarPlayerScreenState extends State<CarPlayerScreen> {
                           ],
                         ),
                       ),
+                      if (!widget.preview && mode != 'standby')
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 12,
+                          child: _UpdateBanner(
+                            ctrl: ctrl,
+                            onOpen: widget.onUpdates == null ? null : () => widget.onUpdates!(themed),
+                          ),
+                        ),
+                      if (ctrl.nightDim)
+                        IgnorePointer(
+                          key: const ValueKey('night-dim'),
+                          child: ColoredBox(color: Colors.black.withValues(alpha: cfg.night.dimAmount)),
+                        ),
+                      if (_splash && !reduced)
+                        CarSplash(
+                          duration: Duration(milliseconds: cfg.anim.splashMs),
+                          holdAt: widget.splashHoldAt,
+                          onDone: () => setState(() => _splash = false),
+                        ),
                     ],
                   );
                 },
@@ -234,7 +329,127 @@ class _CarPlayerScreenState extends State<CarPlayerScreen> {
             );
           },
         ),
+        ),
       ),
+    );
+  }
+}
+
+/// Cambia la tipografía de todo el texto (Configuración → Disposición y estilo).
+class CarFontTheme extends StatelessWidget {
+  const CarFontTheme({super.key, required this.font, required this.child});
+  final CarFont font;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (font == CarFont.googleSans) return child;
+    final t = Theme.of(context);
+    final family = font.family ?? 'Roboto';
+    return Theme(
+      data: t.copyWith(textTheme: t.textTheme.apply(fontFamily: family)),
+      child: child,
+    );
+  }
+}
+
+/// Fondo que no son las formas: portada difuminada o degradado del esquema.
+class _Backdrop extends StatelessWidget {
+  const _Backdrop({required this.kind, required this.artwork, required this.low, required this.reduced});
+  final CarBackground kind;
+  final Uint8List? artwork;
+  final bool low;
+  final bool reduced;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = context.cs;
+    final gradient = DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            cs.primaryContainer.withValues(alpha: 0.55),
+            cs.surface,
+            cs.tertiaryContainer.withValues(alpha: 0.35),
+          ],
+          stops: const [0, 0.55, 1],
+        ),
+      ),
+    );
+    // Sin carátula o en modo rendimiento (el desenfoque es lo más caro), el degradado.
+    if (kind == CarBackground.gradient || artwork == null || low) return gradient;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        CoverSwap(artwork: artwork, reduced: reduced, iconSize: 0),
+        BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 60, sigmaY: 60),
+          child: ColoredBox(color: cs.surface.withValues(alpha: 0.55)),
+        ),
+      ],
+    );
+  }
+}
+
+/// Aviso discreto de versión nueva (se cierra con la X).
+class _UpdateBanner extends StatelessWidget {
+  const _UpdateBanner({required this.ctrl, this.onOpen});
+  final CarController ctrl;
+  final VoidCallback? onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: ctrl.updater,
+      builder: (context, _) {
+        final u = ctrl.updater;
+        final show = u.showBanner;
+        final cs = context.cs;
+        return AnimatedSwitcher(
+          duration: HxMotion.dSpring,
+          switchInCurve: HxMotion.emphasizedDecel,
+          transitionBuilder: (c, a) => FadeTransition(
+            opacity: a,
+            child: SlideTransition(position: Tween(begin: const Offset(0, 0.6), end: Offset.zero).animate(a), child: c),
+          ),
+          child: !show
+              ? const SizedBox.shrink()
+              : Center(
+                  key: const ValueKey('update-banner'),
+                  child: Material(
+                    color: cs.inverseSurface,
+                    shape: const StadiumBorder(),
+                    elevation: 6,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 4, 4),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          HxIcon(Symbols.system_update_rounded, size: 20, color: cs.inversePrimary),
+                          const SizedBox(width: 10),
+                          Text(
+                            'Versión ${u.info?.versionName ?? 'nueva'} disponible',
+                            style: context.tt.labelLarge?.copyWith(color: cs.onInverseSurface),
+                          ),
+                          if (onOpen != null)
+                            TextButton(
+                              onPressed: onOpen,
+                              child: Text('Ver', style: TextStyle(color: cs.inversePrimary)),
+                            ),
+                          IconButton(
+                            tooltip: 'Cerrar aviso',
+                            onPressed: u.dismissBanner,
+                            icon: HxIcon(Symbols.close_rounded, size: 20, color: cs.onInverseSurface),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+        );
+      },
     );
   }
 }
@@ -250,6 +465,7 @@ class _Header extends StatelessWidget {
     required this.demo,
     required this.onLeft,
     required this.onSettings,
+    this.connectivity,
   });
 
   final String mode;
@@ -258,6 +474,9 @@ class _Header extends StatelessWidget {
   final bool demo;
   final VoidCallback? onLeft;
   final VoidCallback onSettings;
+
+  /// Bluetooth / Wi-Fi del radio (chips).
+  final CarConnectivity? connectivity;
 
   @override
   Widget build(BuildContext context) {
@@ -274,8 +493,10 @@ class _Header extends StatelessWidget {
     final showClock = full && cfg.show(CarElement.clock);
     final showChip = full && cfg.show(CarElement.statusChip);
     final showSettings = full && cfg.show(CarElement.settingsButton);
+    final conn = connectivity;
+    final sysChips = full && conn != null && (cfg.show(CarElement.btChip) || cfg.show(CarElement.wifiChip));
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: EdgeInsets.fromLTRB(16, (cfg.style.headerHeight - 48).clamp(0.0, 48.0), 16, 0),
       child: SizedBox(
         height: 48,
         child: Row(
@@ -300,7 +521,20 @@ class _Header extends StatelessWidget {
                   : const SizedBox.shrink(),
             ),
             if (showClock) ...[const _Clock(), const SizedBox(width: 12)],
-            if (showChip) ...[_StatusChip(status: status, demo: demo, onTap: onSettings), const SizedBox(width: 8)],
+            if (sysChips)
+              Flexible(
+                child: ListenableBuilder(
+                  listenable: conn,
+                  builder: (context, _) => _SystemChips(info: conn.info, cfg: cfg, onTap: onSettings),
+                ),
+              ),
+            if (showChip)
+              Flexible(
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: _StatusChip(status: status, demo: demo, onTap: onSettings),
+                ),
+              ),
             if (showSettings) HxIconButton(icon: Symbols.settings_rounded, tooltip: 'Ajustes', onTap: onSettings),
           ],
         ),
@@ -360,6 +594,10 @@ class _StatusChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final cfg = CarCustomScope.of(context);
     final (IconData icon, String label) = switch (status.phase) {
+      LinkPhase.connected when !status.authenticated && !demo => (
+        Symbols.lock_rounded,
+        '${status.device ?? 'Celular'} · Emparejando',
+      ),
       LinkPhase.connected => (
         status.transport == 'bt' ? Symbols.bluetooth_rounded : Symbols.wifi_rounded,
         '${(status.device ?? 'Celular').replaceAll(' (demo)', '')} · '
@@ -372,8 +610,106 @@ class _StatusChip extends StatelessWidget {
       LinkPhase.searching => (Symbols.wifi_tethering_rounded, cfg.text(CarText.statusSearching)),
       LinkPhase.disconnected => (Symbols.link_off_rounded, cfg.text(CarText.statusOff)),
     };
-    if (label.isEmpty) return const SizedBox.shrink();
-    return HxChip(icon: icon, label: label, on: status.isConnected, onTap: onTap, maxWidth: 280);
+    final chip = label.isEmpty
+        ? const SizedBox.shrink(key: ValueKey('none'))
+        : HxChip(
+            key: ValueKey('$icon$label'),
+            icon: icon,
+            label: label,
+            on: status.isLinked,
+            onTap: onTap,
+            maxWidth: 280,
+          );
+    return AnimatedChip(enabled: cfg.anim.chipAnim && !carReducedMotion(context, cfg), child: chip);
+  }
+}
+
+/// Entrada/salida de un chip: crece desde su ancho y aparece con un fundido.
+class AnimatedChip extends StatelessWidget {
+  const AnimatedChip({super.key, required this.child, this.enabled = true});
+  final Widget child;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!enabled) return child;
+    return AnimatedSize(
+      duration: HxMotion.dSpring,
+      curve: HxMotion.emphasizedDecel,
+      alignment: Alignment.centerRight,
+      child: AnimatedSwitcher(
+        duration: HxMotion.dSpring,
+        switchInCurve: HxMotion.emphasizedDecel,
+        switchOutCurve: HxMotion.emphasizedAccel,
+        transitionBuilder: (c, a) => FadeTransition(
+          opacity: a,
+          child: ScaleTransition(scale: Tween(begin: 0.85, end: 1.0).animate(a), child: c),
+        ),
+        child: child,
+      ),
+    );
+  }
+}
+
+/// Chips compactos del Bluetooth (equipo conectado al radio) y del Wi-Fi / hotspot.
+class _SystemChips extends StatelessWidget {
+  const _SystemChips({required this.info, required this.cfg, required this.onTap});
+  final ConnectivityInfo info;
+  final CarCustomization cfg;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final anim = cfg.anim.chipAnim && !carReducedMotion(context, cfg);
+    final bt = info.mainBt;
+    final chips = <Widget>[
+      if (cfg.show(CarElement.btChip))
+        AnimatedChip(
+          enabled: anim,
+          child: bt == null
+              ? const SizedBox.shrink(key: ValueKey('bt-none'))
+              : HxChip(
+                  key: ValueKey('bt-${bt.name}'),
+                  icon: Symbols.bluetooth_connected_rounded,
+                  label: bt.name,
+                  on: true,
+                  onTap: onTap,
+                  maxWidth: 200,
+                ),
+        ),
+      if (cfg.show(CarElement.wifiChip))
+        AnimatedChip(
+          enabled: anim,
+          child: switch (info) {
+            ConnectivityInfo(hotspotOn: true, :final hotspotClients) => HxChip(
+              key: ValueKey('hs-$hotspotClients'),
+              icon: Symbols.wifi_tethering_rounded,
+              label: hotspotClients == null
+                  ? 'Hotspot'
+                  : 'Hotspot · $hotspotClients ${hotspotClients == 1 ? 'equipo' : 'equipos'}',
+              onTap: onTap,
+              maxWidth: 220,
+            ),
+            ConnectivityInfo(wifiConnected: true, :final wifiSsid) => HxChip(
+              key: ValueKey('wifi-$wifiSsid'),
+              icon: Symbols.wifi_rounded,
+              label: wifiSsid ?? 'Wi-Fi',
+              onTap: onTap,
+              maxWidth: 200,
+            ),
+            _ => const SizedBox.shrink(key: ValueKey('wifi-none')),
+          },
+        ),
+    ];
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final c in chips)
+          Flexible(
+            child: Padding(padding: const EdgeInsets.only(right: 8), child: c),
+          ),
+      ],
+    );
   }
 }
 
@@ -495,6 +831,7 @@ class _Stage extends StatelessWidget {
     required this.onTab,
     required this.onFullscreen,
     required this.reduced,
+    this.entrance = false,
   });
 
   final CarController ctrl;
@@ -505,6 +842,9 @@ class _Stage extends StatelessWidget {
   final ValueChanged<String> onTab;
   final VoidCallback onFullscreen;
   final bool reduced;
+
+  /// Entrada escalonada de las columnas (portada → detalles → panel).
+  final bool entrance;
 
   @override
   Widget build(BuildContext context) {
@@ -572,7 +912,10 @@ class _Stage extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              for (var i = 0; i < columns.length; i++) ...[if (i > 0) SizedBox(width: l.gap), columns[i]],
+              for (var i = 0; i < columns.length; i++) ...[
+                if (i > 0) SizedBox(width: l.gap),
+                HxEntrance(index: i + 1, enabled: entrance, child: columns[i]),
+              ],
             ],
           ),
         ),

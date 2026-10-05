@@ -7,6 +7,7 @@ import 'package:pixel_car_player/car/audio/car_audio_levels.dart';
 import 'package:pixel_car_player/car/custom/car_customization.dart';
 import 'package:pixel_car_player/car/widgets/hx.dart';
 import 'package:pixel_car_player/core/shapes/m3_shapes.dart';
+import 'package:pixel_car_player/core/theme/app_theme.dart';
 
 /// CoverVisualiser de Caelestia / Harmonix v2 (`Disc.svelte`): la portada recortada con
 /// una forma MD3 (Cookie9Sided por defecto), que gira (solo la máscara; 23,5 s por vuelta)
@@ -35,9 +36,13 @@ class Disc extends StatefulWidget {
     this.reduced,
     this.audio,
     this.realAudio = false,
+    this.coverChange = CarCoverChange.crossfade,
   });
 
   final Uint8List? artwork;
+
+  /// Animación al cambiar la portada (Configuración → Animaciones).
+  final CarCoverChange coverChange;
   final double size;
   final bool playing;
   final int? seed;
@@ -220,7 +225,12 @@ class _DiscState extends State<Disc> with SingleTickerProviderStateMixin {
               dimension: coverSize,
               child: ClipPath(
                 clipper: _RotatingClip(shape, () => _rotation, _frame),
-                child: HxCover(bytes: widget.artwork, iconSize: coverSize * 0.3),
+                child: CoverSwap(
+                  artwork: widget.artwork,
+                  mode: widget.coverChange,
+                  reduced: _reduced,
+                  iconSize: coverSize * 0.3,
+                ),
               ),
             ),
           ],
@@ -228,6 +238,79 @@ class _DiscState extends State<Disc> with SingleTickerProviderStateMixin {
       ),
     );
   }
+}
+
+/// La carátula con la animación de cambio elegida: fundido, deslizar, escala o una forma
+/// que crece desde el centro (MD3 shape morph).
+class CoverSwap extends StatelessWidget {
+  const CoverSwap({
+    super.key,
+    required this.artwork,
+    this.mode = CarCoverChange.crossfade,
+    this.reduced = false,
+    this.iconSize = 48,
+  });
+  final Uint8List? artwork;
+  final CarCoverChange mode;
+  final bool reduced;
+  final double iconSize;
+
+  @override
+  Widget build(BuildContext context) {
+    final key = ValueKey(artwork == null ? 0 : identityHashCode(artwork));
+    final child = KeyedSubtree(
+      key: key,
+      child: HxCover(bytes: artwork, iconSize: iconSize),
+    );
+    if (reduced) return child;
+    return AnimatedSwitcher(
+      duration: mode == CarCoverChange.crossfade ? HxMotion.dLarge : const Duration(milliseconds: 650),
+      switchInCurve: HxMotion.emphasizedDecel,
+      switchOutCurve: HxMotion.emphasizedAccel,
+      layoutBuilder: (current, previous) => Stack(fit: StackFit.expand, children: [...previous, ?current]),
+      transitionBuilder: (c, a) {
+        final incoming = c.key == key;
+        switch (mode) {
+          case CarCoverChange.crossfade:
+            return FadeTransition(opacity: a, child: c);
+          case CarCoverChange.slide:
+            return SlideTransition(
+              position: Tween(begin: Offset(incoming ? 1 : -1, 0), end: Offset.zero).animate(a),
+              child: c,
+            );
+          case CarCoverChange.scalePop:
+            return FadeTransition(
+              opacity: a,
+              child: ScaleTransition(scale: Tween(begin: incoming ? 0.78 : 1.12, end: 1.0).animate(a), child: c),
+            );
+          case CarCoverChange.morph:
+            if (!incoming) return c;
+            return AnimatedBuilder(
+              animation: a,
+              builder: (_, child) => ClipPath(clipper: _MorphReveal(a.value), child: child),
+              child: c,
+            );
+        }
+      },
+      child: child,
+    );
+  }
+}
+
+/// Revela la portada nueva con una galleta de 4 lados que gira y se vuelve círculo al crecer.
+class _MorphReveal extends CustomClipper<Path> {
+  _MorphReveal(this.t);
+  final double t;
+
+  @override
+  Path getClip(Size size) {
+    final r = size.shortestSide * 0.75 * t;
+    final rect = Rect.fromCircle(center: size.center(Offset.zero), radius: math.max(0.5, r));
+    return M3Shape.lerp(M3Shape.cookie4, M3Shape.circle, t).toPath(rect, rotation: (1 - t) * math.pi / 2);
+  }
+
+  @override
+  bool shouldReclip(_MorphReveal old) => old.t != t;
 }
 
 class _RotatingClip extends CustomClipper<Path> {

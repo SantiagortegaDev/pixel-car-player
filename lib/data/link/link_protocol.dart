@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:pixel_car_player/core/models/now_playing.dart';
 
+export 'package:pixel_car_player/core/models/now_playing.dart' show RepeatMode, PlayerModes;
+
 /// Protocolo de enlace celular ⇄ tableta (docs/CONTRACT.md §1).
 ///
 /// Una línea JSON UTF-8 por mensaje, terminada en `\n`, campo `t` = tipo.
@@ -39,13 +41,26 @@ class LinkProtocol {
   }
 
   // ---- Tableta → celular ----
-  /// `hello` de la tableta; [id] = identificador estable de esta instalación (v2).
-  static Map<String, dynamic> hello(String device, {String? id}) => {
+  /// `hello` de la tableta; [id] = identificador estable de esta instalación (v2) y
+  /// [nonce] = 16 bytes hex nuevos por conexión (v3).
+  static Map<String, dynamic> hello(String device, {String? id, String? nonce}) => {
     't': 'hello',
     'v': version,
     'device': device,
     if (id != null && id.isNotEmpty) 'id': id,
+    if (nonce != null && nonce.isNotEmpty) 'nonce': nonce,
   };
+
+  // ---- v3: emparejamiento (CONTRACT.md §1 v3) ----
+  static Map<String, dynamic> auth(String mac) => {'t': 'auth', 'mac': mac};
+  static Map<String, dynamic> pairShown() => {'t': 'pair_shown'};
+  static Map<String, dynamic> pairOk() => {'t': 'pair_ok'};
+
+  /// [reason]: `code` | `expired` | `busy`.
+  static Map<String, dynamic> pairFail(String reason) => {'t': 'pair_fail', 'reason': reason};
+
+  /// Tipos que la tableta puede mandar antes de autenticar.
+  static const preAuthTypes = {'hello', 'auth', 'pair_shown', 'pair_ok', 'pair_fail', 'pong'};
 
   /// Beacon UDP de la tableta (v2, puerto [carBeaconPort]).
   static Map<String, dynamic> carBeacon({required String device, required String id, int port = carTcpPort}) => {
@@ -74,15 +89,18 @@ class LinkProtocol {
   /// Máximo de temas de `queue` que se envían / aceptan.
   static const int maxQueue = 20;
 
-  static Map<String, dynamic> cmd(LinkAction action, {int? positionMs}) => {
+  static Map<String, dynamic> cmd(LinkAction action, {int? positionMs, int? queueId}) => {
     't': 'cmd',
     'action': action.name,
     if (action == LinkAction.seek) 'positionMs': positionMs ?? 0,
+    if (action == LinkAction.skipToQueue) 'queueId': queueId ?? 0,
   };
 }
 
-/// Acciones de `cmd` (también usadas por `localMediaCommand`).
-enum LinkAction { play, pause, toggle, next, previous, seek }
+/// Acciones de `cmd` (también usadas por `localMediaCommand`). v3 agrega `shuffle`
+/// (alternar), `repeat` (off→all→one), `like` (alternar) y `skipToQueue` (+ `queueId`).
+enum LinkAction { play, pause, toggle, next, previous, seek, shuffle, repeat, like, skipToQueue }
+
 
 /// Acumula fragmentos de texto y devuelve líneas completas.
 /// Tolera `\r\n`, fragmentos parciales y varias líneas por fragmento.
@@ -155,12 +173,21 @@ sealed class LinkMessage {
     switch (j['t']) {
       case 'hello':
         final id = j['id'];
+        final nonce = j['nonce'];
         return HelloMessage(
           device: (j['device'] as String?) ?? 'Celular',
           source: j['source'] as String?,
           version: (j['v'] as num?)?.toInt() ?? 1,
           id: id is String && id.isNotEmpty ? id : null,
+          nonce: nonce is String && nonce.isNotEmpty ? nonce : null,
         );
+      case 'auth':
+        return AuthMessage(j['mac'] is String ? j['mac'] as String : '');
+      case 'pair_request':
+        final name = j['name'];
+        return PairRequestMessage(name is String && name.isNotEmpty ? name : null);
+      case 'pair':
+        return PairMessage(code: '${j['code'] ?? ''}'.trim(), token: j['token'] is String ? j['token'] as String : '');
       case 'track':
         return TrackMessage(TrackInfo.fromJson(j));
       case 'art':
@@ -173,10 +200,17 @@ sealed class LinkMessage {
         }
         return ArtMessage(id: (j['id'] as String?) ?? '', mime: (j['mime'] as String?) ?? 'image/jpeg', bytes: bytes);
       case 'state':
+        bool? b(Object? v) => v is bool ? v : null;
         return StateMessage(
           playing: j['playing'] == true,
           position: Duration(milliseconds: (j['positionMs'] as num?)?.toInt() ?? 0),
           speed: (j['speed'] as num?)?.toDouble() ?? 1.0,
+          shuffle: b(j['shuffle']),
+          repeat: RepeatMode.parse(j['repeat']),
+          liked: b(j['liked']),
+          canLike: b(j['canLike']),
+          canShuffle: b(j['canShuffle']),
+          canRepeat: b(j['canRepeat']),
         );
       case 'lyrics':
         final lines =
@@ -222,13 +256,35 @@ sealed class LinkMessage {
 }
 
 class HelloMessage extends LinkMessage {
-  const HelloMessage({required this.device, this.source, this.version = 1, this.id});
+  const HelloMessage({required this.device, this.source, this.version = 1, this.id, this.nonce});
   final String device;
   final String? source;
   final int version;
 
   /// Identificador estable de la instalación del celular (v2; `null` en v1).
   final String? id;
+
+  /// Nonce de la conexión (v3; `null` en celulares viejos).
+  final String? nonce;
+}
+
+/// `auth` del celular (v3): `mac = HMAC(token, "<nonce de la tableta>:<id del celular>")`.
+class AuthMessage extends LinkMessage {
+  const AuthMessage(this.mac);
+  final String mac;
+}
+
+/// El celular pide un código (v3).
+class PairRequestMessage extends LinkMessage {
+  const PairRequestMessage(this.name);
+  final String? name;
+}
+
+/// El celular manda el código escrito y su token nuevo (v3).
+class PairMessage extends LinkMessage {
+  const PairMessage({required this.code, required this.token});
+  final String code;
+  final String token;
 }
 
 class TrackMessage extends LinkMessage {
@@ -244,10 +300,28 @@ class ArtMessage extends LinkMessage {
 }
 
 class StateMessage extends LinkMessage {
-  const StateMessage({required this.playing, required this.position, this.speed = 1.0});
+  const StateMessage({
+    required this.playing,
+    required this.position,
+    this.speed = 1.0,
+    this.shuffle,
+    this.repeat,
+    this.liked,
+    this.canLike,
+    this.canShuffle,
+    this.canRepeat,
+  });
   final bool playing;
   final Duration position;
   final double speed;
+
+  /// v3 (todos `null` si el celular no los manda / no se sabe).
+  final bool? shuffle;
+  final RepeatMode? repeat;
+  final bool? liked;
+  final bool? canLike;
+  final bool? canShuffle;
+  final bool? canRepeat;
 }
 
 class LyricsMessage extends LinkMessage {
@@ -258,22 +332,54 @@ class LyricsMessage extends LinkMessage {
   final List<LyricLine> lines;
 }
 
-/// Tema de la cola (`queue`): solo título y artista.
+/// Tema de la cola (`queue`): título, artista y (v3) `id` de la cola + miniatura JPEG.
 class QueueItem {
-  const QueueItem({required this.title, this.artist = ''});
+  const QueueItem({required this.title, this.artist = '', this.id, this.art});
   final String title;
   final String artist;
 
-  factory QueueItem.fromJson(Map<String, dynamic> j) =>
-      QueueItem(title: (j['title'] as String?) ?? '', artist: (j['artist'] as String?) ?? '');
+  /// `queueId` para `cmd skipToQueue` (`null` = no se puede saltar a este tema).
+  final int? id;
 
-  Map<String, dynamic> toJson() => {'title': title, 'artist': artist};
+  /// Miniatura (JPEG 96 px) si el celular la mandó.
+  final Uint8List? art;
+
+  factory QueueItem.fromJson(Map<String, dynamic> j) {
+    Uint8List? art;
+    final b64 = j['art'];
+    if (b64 is String && b64.isNotEmpty) {
+      try {
+        art = base64Decode(b64);
+      } on FormatException {
+        art = null;
+      }
+    }
+    final id = j['id'];
+    return QueueItem(
+      title: (j['title'] as String?) ?? '',
+      artist: (j['artist'] as String?) ?? '',
+      id: id is num ? id.toInt() : null,
+      art: art,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'title': title,
+    'artist': artist,
+    'id': ?id,
+    if (art != null) 'art': base64Encode(art!),
+  };
 
   @override
-  bool operator ==(Object other) => other is QueueItem && other.title == title && other.artist == artist;
+  bool operator ==(Object other) =>
+      other is QueueItem &&
+      other.title == title &&
+      other.artist == artist &&
+      other.id == id &&
+      other.art?.length == art?.length;
 
   @override
-  int get hashCode => Object.hash(title, artist);
+  int get hashCode => Object.hash(title, artist, id, art?.length);
 }
 
 /// Próximos temas (puede no llegar nunca: la lista vacía es válida).

@@ -4,6 +4,7 @@ import 'package:pixel_car_player/car/car_root.dart';
 import 'package:pixel_car_player/core/app_mode.dart';
 import 'package:pixel_car_player/core/theme/app_theme.dart';
 import 'package:pixel_car_player/phone/phone_root.dart';
+import 'package:pixel_car_player/phone/widgets/hx/hx_motion.dart';
 import 'package:pixel_car_player/setup/mode_select_screen.dart';
 
 Future<void> main() async {
@@ -41,7 +42,7 @@ class _PixelCarPlayerAppState extends State<PixelCarPlayerApp> {
 
   @override
   Widget build(BuildContext context) {
-    final Widget home = switch (_mode) {
+    final Widget screen = switch (_mode) {
       // La tableta genera su propio tema Material You desde la carátula.
       AppMode.car => CarRoot(
           demo: widget.config.demo,
@@ -50,6 +51,10 @@ class _PixelCarPlayerAppState extends State<PixelCarPlayerApp> {
       AppMode.phone => PhoneRoot(onChangeMode: () => _setMode(null)),
       null => ModeSelectScreen(onSelected: _setMode),
     };
+    // Cambio de modo (p. ej. elegir "Transmisor" en la selección): fundido con escala.
+    final Widget home = HxFadeThroughSwitcher(
+      child: KeyedSubtree(key: ValueKey(_mode), child: screen),
+    );
     // Como Harmonix v2: el color sale de la portada que suena (cada pantalla envuelve
     // su contenido en HxAnimatedTheme); aquí va el tema base con la semilla por defecto.
     const seed = AppTheme.fallbackSeed;

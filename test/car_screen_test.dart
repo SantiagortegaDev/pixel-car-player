@@ -34,6 +34,10 @@ void main() {
       ),
     );
     await tester.pump(const Duration(seconds: 2));
+    // Las entradas escalonadas arrancan en el primer tick: dejarlas terminar.
+    for (var i = 0; i < 4; i++) {
+      await tester.pump(const Duration(milliseconds: 500));
+    }
   }
 
   void feed(CarController c, DemoTrack t, {bool queue = true}) {

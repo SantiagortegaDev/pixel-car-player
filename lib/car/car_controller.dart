@@ -7,7 +7,11 @@ import 'package:pixel_car_player/car/audio/car_audio_levels.dart';
 import 'package:pixel_car_player/car/custom/car_customization.dart';
 import 'package:pixel_car_player/car/custom/car_customization_store.dart';
 import 'package:pixel_car_player/car/lyrics/lrclib_client.dart';
+import 'package:pixel_car_player/car/system/car_backup.dart';
+import 'package:pixel_car_player/car/system/car_connectivity.dart';
 import 'package:pixel_car_player/car/system/car_hotspot.dart';
+import 'package:pixel_car_player/car/system/car_performance.dart';
+import 'package:pixel_car_player/car/system/car_updates.dart';
 import 'package:pixel_car_player/core/models/now_playing.dart';
 import 'package:pixel_car_player/core/theme/app_theme.dart';
 import 'package:pixel_car_player/data/bridge/native_bridge.dart';
@@ -61,9 +65,15 @@ class CarController extends ChangeNotifier {
     Future<Color> Function(Uint8List artwork)? seedBuilder,
     CarHotspot? hotspot,
     CarAudioLevels? audio,
+    CarTrustStore? trust,
+    CarConnectivity? connectivity,
+    CarUpdater? updater,
+    CarPerformance? performance,
   }) : _bridge = bridge ?? NativeBridge.instance,
        hotspot = hotspot ?? CarHotspot(bridge: bridge),
        audio = audio ?? CarAudioLevels(),
+       connectivity = connectivity ?? CarConnectivity(bridge: bridge),
+       updater = updater ?? CarUpdater(bridge: bridge),
        prefs = prefs ?? CarPrefs(demo: demo),
        _ownsCustom = custom == null,
        custom = custom ?? CarCustomizationStore(),
@@ -81,8 +91,13 @@ class CarController extends ChangeNotifier {
           btName: this.prefs.btName,
           useWifi: conn.transport != CarTransport.bt,
           maxBackoff: Duration(seconds: conn.reconnectSeconds),
+          trust: trust,
         );
+    this.performance = performance ?? CarPerformance(mode: this.custom.value.anim.perf);
+    this.performance.addListener(_changed);
+    this.updater.backup = saveBackupToFile;
     _lastConnection = conn;
+    _lastKeepFront = this.custom.value.keepFront;
     _lastViz = this.custom.value.visualizer;
     _lastHotspot = this.custom.value.hotspot;
     this.hotspot.allowTemporary = this.custom.value.hotspot.allowTemporary;
@@ -107,6 +122,19 @@ class CarController extends ChangeNotifier {
 
   /// Audio real de la tableta para el visualizador.
   final CarAudioLevels audio;
+
+  /// Bluetooth / Wi-Fi del radio (chips del encabezado y Diagnóstico).
+  final CarConnectivity connectivity;
+
+  /// Actualizaciones de la app (Configuración → Actualizaciones).
+  final CarUpdater updater;
+
+  /// Modo rendimiento (menos barras / formas / desenfoque).
+  late final CarPerformance performance;
+  late CarKeepFrontOpts _lastKeepFront;
+
+  /// Celulares de confianza y "Requerir emparejamiento".
+  CarTrustStore get trust => link.trust;
 
   /// Resultado del último pedido de permiso de audio (`null` = aún no se pidió).
   bool? audioPermission;
@@ -151,7 +179,7 @@ class CarController extends ChangeNotifier {
 
   DemoSource? _demo;
   StreamSubscription<LinkMessage>? _msgSub;
-  StreamSubscription<LinkMessage>? _helloSub;
+  StreamSubscription<void>? _authSub;
 
   /// Última red enviada al celular en este enlace (para no repetirla).
   String? _sharedHotspot;
@@ -182,7 +210,7 @@ class CarController extends ChangeNotifier {
 
   CarSource get source {
     if (demo) return CarSource.demo;
-    if (link.status.value.isConnected) return CarSource.phone;
+    if (link.status.value.isLinked) return CarSource.phone;
     if (_local.track != null) return CarSource.local;
     if (_idleDemo) return CarSource.demo;
     return CarSource.none;
@@ -216,6 +244,7 @@ class CarController extends ChangeNotifier {
       CarThemeMode.dark => Brightness.dark,
       CarThemeMode.light => Brightness.light,
       CarThemeMode.auto => platform ?? PlatformDispatcher.instance.platformBrightness,
+      CarThemeMode.schedule => night ? Brightness.dark : Brightness.light,
     };
     final key = (seed.toARGB32(), d.variant, brightness);
     if (key == _schemeMemoKey && _schemeMemo != null) return _schemeMemo!;
@@ -250,11 +279,75 @@ class CarController extends ChangeNotifier {
     return np.playing || audioDetected || cfg.visualizer.animateAlways;
   }
 
+  // ---- Reloj de espera y noche ----
+
+  DateTime _lastActive = DateTime.now();
+  bool _standby = false;
+  bool _standbyForced = false;
+  bool _dismissedDisconnected = false;
+  bool _night = false;
+  int _ticks = 0;
+  DateTime Function() clock = DateTime.now;
+
+  /// Lo último que sonó (para el reloj de espera).
+  NowPlaying lastPlayed = const NowPlaying();
+
+  /// Se muestra el reloj de espera.
+  bool get standby => _standby;
+
+  /// Horario de noche ([CarNightOpts]).
+  bool get night => _night;
+
+  /// Atenuar la pantalla ahora (modo noche activo y dentro del horario).
+  bool get nightDim => cfg.night.dim && _night;
+
+  /// Muestra el reloj ya (web `?standby=1`, pruebas, botón "Probar").
+  void showStandby() {
+    _standbyForced = true;
+    _checkStandby();
+  }
+
+  /// Tocar el reloj: vuelve al reproductor (y cuenta de nuevo los minutos).
+  void wakeFromStandby() {
+    _standbyForced = false;
+    _lastActive = clock();
+    if (cfg.standby.whenDisconnected && !link.status.value.isConnected) _dismissedDisconnected = true;
+    _checkStandby();
+  }
+
+  /// ¿Corresponde el reloj de espera ahora?
+  @visibleForTesting
+  bool computeStandby(DateTime now) {
+    if (_standbyForced) return true;
+    final s = cfg.standby;
+    if (nowPlaying.playing) return false;
+    if (s.idleMinutes > 0 && now.difference(_lastActive) >= Duration(minutes: s.idleMinutes)) return true;
+    return s.whenDisconnected &&
+        !demo &&
+        !_idleDemo &&
+        !link.status.value.isConnected &&
+        _local.track == null &&
+        !_dismissedDisconnected;
+  }
+
+  void _checkStandby() {
+    final now = clock();
+    if (nowPlaying.playing) _lastActive = now;
+    final night = cfg.night.isNight(now);
+    final st = computeStandby(now);
+    if (st != _standby || night != _night) {
+      _standby = st;
+      _night = night;
+      _changed();
+    }
+  }
+
   // ---------------------------------------------------------------------------
 
   Future<void> start() async {
     if (_started) return;
     _started = true;
+    _night = cfg.night.isNight(clock());
     link.status.addListener(_onLinkStatus);
     _ticker = Timer.periodic(const Duration(milliseconds: 250), (_) => _tick());
     unawaited(_bridge.setKeepScreenOn(prefs.keepScreenOn));
@@ -267,7 +360,8 @@ class CarController extends ChangeNotifier {
       unawaited(_bridge.startLocalMediaWatch());
     }
     _msgSub ??= link.messages.listen(apply);
-    _helloSub ??= link.messages.where((m) => m is HelloMessage).listen((_) {
+    // v3: la red del carro solo se manda con la sesión autenticada.
+    _authSub ??= link.onAuthenticated.listen((_) {
       _sharedHotspot = null;
       unawaited(shareHotspot());
     });
@@ -275,6 +369,18 @@ class CarController extends ChangeNotifier {
     unawaited(syncVisualizer());
     _syncHotspot(initial: true);
     unawaited(launchCompanionOnStart());
+    _syncKeepFront(initial: true);
+    performance.start();
+    unawaited(connectivity.start());
+    updater.start();
+    if (kIsWeb) {
+      final q = Uri.base.queryParameters;
+      if (q['conn'] == 'sample' || demo) connectivity.fillSample();
+      if (q['update'] == 'sample') updater.fillSample();
+      if (q['standby'] == '1') showStandby();
+    } else if (cfg.updates.autoCheck && _bridge.isSupported) {
+      unawaited(updater.autoCheckIfDue());
+    }
     if (demo) {
       await _startDemo();
     } else if (cfg.connection.autoConnect) {
@@ -352,10 +458,10 @@ class CarController extends ChangeNotifier {
     return (ssid, info.networkPassword ?? '');
   }
 
-  /// Tras el `hello` del celular: le pasa la red del carro (si el usuario lo permite) para
-  /// que se una solo (`{"t":"hotspot"}`, CONTRACT.md §1 v2). `true` si se envió.
+  /// Al autenticar la sesión: le pasa la red del carro al celular (si el usuario lo permite)
+  /// para que se una solo (`{"t":"hotspot"}`, CONTRACT.md §1 v2/v3). `true` si se envió.
   Future<bool> shareHotspot({bool force = false}) async {
-    if (demo || !cfg.hotspot.shareWithPhone || !link.status.value.isConnected) return false;
+    if (demo || !cfg.hotspot.shareWithPhone || !link.status.value.isLinked) return false;
     var net = hotspotNetwork;
     if (net == null && _bridge.isSupported) {
       await hotspot.refresh();
@@ -383,6 +489,92 @@ class CarController extends ChangeNotifier {
     // Si nos abrió el receptor de arranque, la acompañante ya está abierta detrás.
     if (await _bridge.consumeBootLaunch()) return;
     await _bridge.launchApp(pkg, background: true, delayMs: s.companionDelayMs);
+  }
+
+  // ---- Siempre encima y burbuja ----
+
+  void _syncKeepFront({bool initial = false}) {
+    final k = cfg.keepFront;
+    if (!initial && k == _lastKeepFront) return;
+    final old = _lastKeepFront;
+    _lastKeepFront = k;
+    if (initial || '${k.nativeConfig()}' != '${old.nativeConfig()}') {
+      unawaited(_bridge.setKeepInFront(k.nativeConfig(fallback: cfg.startup.companionPackage)));
+    }
+    if (initial || k.bubbleConfig().toString() != old.bubbleConfig().toString()) {
+      unawaited(_bridge.setFloatingBubble(k.bubbleConfig()));
+      _bubbleKey = null;
+      _pushBubble();
+    }
+  }
+
+  /// Vuelve a mandar la configuración de "Siempre encima" (tras dar un permiso).
+  Future<void> resyncKeepFront() async {
+    await _bridge.setKeepInFront(cfg.keepFront.nativeConfig(fallback: cfg.startup.companionPackage));
+    await _bridge.setFloatingBubble(cfg.keepFront.bubbleConfig());
+    _bubbleKey = null;
+    _pushBubble();
+  }
+
+  Object? _bubbleKey;
+
+  /// La burbuja muestra el tema actual: se actualiza al cambiar tema, carátula o play/pausa.
+  void _pushBubble() {
+    if (!cfg.keepFront.bubble || !_bridge.isSupported) return;
+    final np = nowPlaying;
+    final key = (np.track?.id, identityHashCode(np.artwork), np.playing);
+    if (key == _bubbleKey) return;
+    _bubbleKey = key;
+    unawaited(
+      _bridge.updateFloatingBubble(
+        title: np.track?.title ?? 'Pixel Car Player',
+        artist: np.track?.artist ?? '',
+        art: np.artwork,
+        playing: np.playing,
+      ),
+    );
+  }
+
+  // ---- Copia de seguridad ----
+
+  /// Toda la configuración de la tableta.
+  CarBackup backupNow() => CarBackup(
+    customization: cfg,
+    trustedPhones: trust.toJson(),
+    requirePairing: trust.requirePairing,
+    link: {
+      'manualIp': ?prefs.manualIp,
+      'btAddress': ?prefs.btAddress,
+      'btName': ?prefs.btName,
+      'keepScreenOn': prefs.keepScreenOn,
+    },
+  );
+
+  /// Guarda la copia en Documentos/PixelCarPlayer/ (nativo). Devuelve la ruta o `null`.
+  Future<String?> saveBackupToFile() => _bridge.saveBackupFile(backupNow().encode(), name: CarBackup.fileName());
+
+  /// Aplica una copia (completa o solo personalización).
+  Future<void> restoreBackup(CarBackup b) async {
+    custom.set(b.customization);
+    if (!b.isFull) return;
+    trust.restore(b.trustedPhones, requirePairing: b.requirePairing);
+    String? str(Object? v) => v is String && v.isNotEmpty ? v : null;
+    prefs
+      ..manualIp = str(b.link['manualIp'])
+      ..btAddress = str(b.link['btAddress'])
+      ..btName = str(b.link['btName'])
+      ..keepScreenOn = b.link['keepScreenOn'] is bool ? b.link['keepScreenOn'] as bool : prefs.keepScreenOn;
+    await prefs.save();
+    await _bridge.setKeepScreenOn(prefs.keepScreenOn);
+    _configureLink();
+    _changed();
+  }
+
+  /// Olvida un celular de confianza (y corta su enlace si está conectado).
+  void forgetPhone(String id) {
+    trust.forget(id);
+    link.dropPeer(id);
+    _changed();
   }
 
   /// "Probar ahora".
@@ -444,6 +636,9 @@ class CarController extends ChangeNotifier {
       _syncHotspot();
     }
     _lastHotspot = hs;
+    performance.mode = cfg.anim.perf;
+    _syncKeepFront();
+    _checkStandby();
     _changed();
   }
 
@@ -537,12 +732,14 @@ class CarController extends ChangeNotifier {
     if (!demo) {
       if (st.isConnected) {
         _remoteDevice = st.device;
+        _dismissedDisconnected = false;
       } else if (!_idleDemo) {
         _remote = const NowPlaying();
         _queue = const [];
       }
     }
     _syncIdleDemo();
+    _checkStandby();
     _changed();
   }
 
@@ -568,12 +765,20 @@ class CarController extends ChangeNotifier {
       case ArtMessage(:final id, :final bytes):
         if (id != _remote.track?.id) return;
         _remote = _remote.copyWith(artwork: bytes);
-      case StateMessage(:final playing, position: final pos, :final speed):
+      case final StateMessage st:
         _remote = _remote.copyWith(
-          playing: playing,
-          position: pos,
+          playing: st.playing,
+          position: st.position,
           positionAt: DateTime.now(),
-          speed: speed <= 0 ? 1.0 : speed,
+          speed: st.speed <= 0 ? 1.0 : st.speed,
+          modes: PlayerModes(
+            shuffle: st.shuffle,
+            repeat: st.repeat,
+            liked: st.liked,
+            canLike: st.canLike,
+            canShuffle: st.canShuffle,
+            canRepeat: st.canRepeat,
+          ),
         );
       case LyricsMessage(:final id, :final status, :final synced, :final lines):
         if (id != _remote.track?.id) return;
@@ -581,7 +786,13 @@ class CarController extends ChangeNotifier {
       case QueueMessage(:final items):
         if (listEquals(items, _queue)) return;
         _queue = List.unmodifiable(items);
-      case PingMessage() || BeaconMessage() || CarBeaconMessage() || UnknownMessage():
+      case PingMessage() ||
+          BeaconMessage() ||
+          CarBeaconMessage() ||
+          UnknownMessage() ||
+          AuthMessage() ||
+          PairRequestMessage() ||
+          PairMessage():
         return;
     }
     _changed();
@@ -669,14 +880,30 @@ class CarController extends ChangeNotifier {
   Future<void> previous() => _command(LinkAction.previous);
   Future<void> seek(Duration to) => _command(LinkAction.seek, positionMs: to.inMilliseconds);
 
-  Future<void> _command(LinkAction action, {int? positionMs}) async {
+  /// Aleatorio (alternar), repetir (off → todo → uno) y me gusta (alternar). v3.
+  Future<void> toggleShuffle() => _command(LinkAction.shuffle);
+  Future<void> cycleRepeat() => _command(LinkAction.repeat);
+  Future<void> toggleLike() => _command(LinkAction.like);
+
+  /// Salta a un tema de "A continuación" (si el celular mandó su `id`).
+  Future<void> skipToQueue(QueueItem item) async {
+    final id = item.id;
+    if (id == null) return;
+    _lastActive = clock();
+    await _command(LinkAction.skipToQueue, queueId: id);
+  }
+
+  Future<void> _command(LinkAction action, {int? positionMs, int? queueId}) async {
     _optimistic(action, positionMs);
+    if (_standby) wakeFromStandby();
     switch (source) {
       case CarSource.demo:
-        _demo?.command(action, positionMs: positionMs);
+        _demo?.command(action, positionMs: positionMs, queueId: queueId);
       case CarSource.phone:
-        final ok = await link.sendCommand(action, positionMs: positionMs);
-        if (!ok) await _bridge.localMediaCommand(action.name, positionMs: positionMs);
+        final ok = await link.sendCommand(action, positionMs: positionMs, queueId: queueId);
+        if (!ok && action != LinkAction.skipToQueue) {
+          await _bridge.localMediaCommand(action.name, positionMs: positionMs);
+        }
       case CarSource.local || CarSource.none:
         await _bridge.localMediaCommand(action.name, positionMs: positionMs);
     }
@@ -694,6 +921,9 @@ class CarController extends ChangeNotifier {
           position: Duration(milliseconds: positionMs ?? 0),
           positionAt: now,
         ),
+        LinkAction.shuffle => np.copyWith(modes: np.modes.copyWith(shuffle: !(np.modes.shuffle ?? false))),
+        LinkAction.repeat => np.copyWith(modes: np.modes.copyWith(repeat: (np.modes.repeat ?? RepeatMode.off).next)),
+        LinkAction.like => np.copyWith(modes: np.modes.copyWith(liked: !(np.modes.liked ?? false))),
         _ => np,
       };
     }
@@ -716,13 +946,18 @@ class CarController extends ChangeNotifier {
     final pos = np.livePosition();
     position.value = pos;
     lyricIndex.value = np.lyricIndexAt(pos + lyricLead);
+    if (_started && ++_ticks % 4 == 0) _checkStandby();
   }
 
   void _changed() {
     if (_disposed) return;
     _tick();
     _updateSeed();
+    final np = nowPlaying;
+    if (np.track != null) lastPlayed = np;
+    if (np.playing) _lastActive = clock();
     notifyListeners();
+    _pushBubble();
   }
 
   /// Calcula (o toma de la caché por pista) la semilla de color de la carátula, como
@@ -773,7 +1008,11 @@ class CarController extends ChangeNotifier {
     _ticker?.cancel();
     _ipTimer?.cancel();
     _msgSub?.cancel();
-    _helloSub?.cancel();
+    _authSub?.cancel();
+    performance.removeListener(_changed);
+    performance.dispose();
+    connectivity.dispose();
+    updater.dispose();
     _nativeSub?.cancel();
     link.status.removeListener(_onLinkStatus);
     _stopDemo();

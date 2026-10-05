@@ -692,7 +692,7 @@ class _DesignPageState extends State<_DesignPage> {
               label: 'Onda',
               description: 'La parte reproducida ondula mientras suena (slider ondulado de Harmonix).',
               value: d.wavy,
-              onChanged: (v) => c.design((x) => x.copyWith(wavy: v)),
+              onChanged: (v) => c.design((x) => x.copyWith(progressStyle: v ? CarProgressStyle.wavy : CarProgressStyle.plain)),
             ),
             if (d.wavy)
               SettingsSlider(

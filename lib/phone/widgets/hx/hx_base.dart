@@ -1,8 +1,28 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:pixel_car_player/core/theme/app_theme.dart';
 
 /// Piezas base de Harmonix v2 (web/src/app.css): texto, íconos y la capa de estado
 /// con ripple (`lib/ripple.js` + `.state`).
+
+/// Vibración al tocar (ajuste "Vibración" del celular). Apagada por defecto: el modo
+/// celular la enciende según sus preferencias.
+class HxHaptics {
+  HxHaptics._();
+  static bool enabled = false;
+
+  static void tap() {
+    if (enabled) HapticFeedback.selectionClick();
+  }
+
+  static void confirm() {
+    if (enabled) HapticFeedback.lightImpact();
+  }
+
+  static void error() {
+    if (enabled) HapticFeedback.heavyImpact();
+  }
+}
 
 /// Estilo de texto con Google Sans Flex (peso real por eje `wght`, `ROND` opcional).
 TextStyle hxText(
@@ -116,7 +136,12 @@ class HxSurface extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       animationDuration: duration,
       child: InkWell(
-        onTap: onTap,
+        onTap: onTap == null
+            ? null
+            : () {
+                HxHaptics.tap();
+                onTap!();
+              },
         onHighlightChanged: onHighlightChanged,
         customBorder: shape,
         splashFactory: InkRipple.splashFactory,

@@ -30,7 +30,7 @@ void main() {
       uiScale: 1.3,
       titleScale: 1.6,
       controlHeight: 96,
-      wavy: false,
+      progressStyle: CarProgressStyle.plain,
       shapesCount: 30,
       shapesOpacity: 2.5,
     ),

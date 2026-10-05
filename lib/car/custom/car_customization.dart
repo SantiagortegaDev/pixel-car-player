@@ -14,7 +14,8 @@ import 'package:pixel_car_player/core/theme/app_theme.dart' show SchemeVariant;
 
 enum CarColorSource { art, fixed }
 
-enum CarThemeMode { dark, light, auto }
+/// Tema: oscuro, claro, el del sistema o por horario (oscuro de noche, ver [CarNightOpts]).
+enum CarThemeMode { dark, light, auto, schedule }
 
 enum CarVizColor { primary, secondary, tertiary, onSurface }
 
@@ -96,7 +97,25 @@ enum CarVizResponse {
 }
 
 /// Secciones del modelo (para restablecer por partes).
-enum CarSection { connection, startup, hotspot, design, cover, visualizer, lyrics, visibility, texts, gestures }
+enum CarSection {
+  connection,
+  startup,
+  hotspot,
+  design,
+  cover,
+  visualizer,
+  lyrics,
+  visibility,
+  texts,
+  gestures,
+  animations,
+  standby,
+  style,
+  night,
+  controls,
+  keepFront,
+  updates,
+}
 
 /// Rango de un ajuste numérico (lo usan el modelo para acotar y la UI para los sliders).
 @immutable
@@ -128,6 +147,8 @@ enum CarElement {
   headerLabel(CarElementGroup.header, 'Texto del encabezado', '«Reproduciendo».'),
   clock.hiddenByDefault(CarElementGroup.header, 'Reloj', 'Hora actual en el encabezado.'),
   statusChip(CarElementGroup.header, 'Chip de conexión', 'Nombre del celular y Wi-Fi/Bluetooth.'),
+  btChip(CarElementGroup.header, 'Chip de Bluetooth', 'Equipo Bluetooth conectado al radio (p. ej. tu celular).'),
+  wifiChip(CarElementGroup.header, 'Chip de Wi-Fi / hotspot', 'Red Wi-Fi o clientes del hotspot del carro.'),
   settingsButton(
     CarElementGroup.header,
     'Botón de Configuración',
@@ -143,6 +164,7 @@ enum CarElement {
   playPause(CarElementGroup.controls, 'Reproducir / pausar'),
   next(CarElementGroup.controls, 'Siguiente'),
   repeat(CarElementGroup.controls, 'Repetir'),
+  like(CarElementGroup.controls, 'Me gusta', 'Corazón al final de la fila (si la app del celular lo permite).'),
   chips(CarElementGroup.chips, 'Fila de chips', 'Todos los chips debajo de los controles.'),
   chipFullscreen(CarElementGroup.chips, 'Chip «Letra en pantalla completa»'),
   chipKeepOn(CarElementGroup.chips, 'Chip «Mantener encendida»'),
@@ -351,7 +373,7 @@ class CarDesign with _JsonEquality {
     this.uiScale = 1.0,
     this.titleScale = 1.0,
     this.controlHeight = 56,
-    this.wavy = true,
+    this.progressStyle = CarProgressStyle.wavy,
     this.waveAmplitude = 1.0,
     this.shapesCount = 14,
     this.shapesOpacity = 1.0,
@@ -368,8 +390,13 @@ class CarDesign with _JsonEquality {
   final double uiScale;
   final double titleScale;
   final double controlHeight;
-  final bool wavy;
+
+  /// Ondulada (Harmonix), plana o fina.
+  final CarProgressStyle progressStyle;
   final double waveAmplitude;
+
+  /// La barra de progreso ondula (estilo "Ondulada").
+  bool get wavy => progressStyle == CarProgressStyle.wavy;
   final int shapesCount;
   final double shapesOpacity;
   final bool shapesAnimate;
@@ -392,7 +419,7 @@ class CarDesign with _JsonEquality {
     double? uiScale,
     double? titleScale,
     double? controlHeight,
-    bool? wavy,
+    CarProgressStyle? progressStyle,
     double? waveAmplitude,
     int? shapesCount,
     double? shapesOpacity,
@@ -406,7 +433,7 @@ class CarDesign with _JsonEquality {
     uiScale: uiScale ?? this.uiScale,
     titleScale: titleScale ?? this.titleScale,
     controlHeight: controlHeight ?? this.controlHeight,
-    wavy: wavy ?? this.wavy,
+    progressStyle: progressStyle ?? this.progressStyle,
     waveAmplitude: waveAmplitude ?? this.waveAmplitude,
     shapesCount: shapesCount ?? this.shapesCount,
     shapesOpacity: shapesOpacity ?? this.shapesOpacity,
@@ -423,6 +450,8 @@ class CarDesign with _JsonEquality {
     'uiScale': uiScale,
     'titleScale': titleScale,
     'controlHeight': controlHeight,
+    'progressStyle': progressStyle.name,
+    // Para versiones anteriores de la app.
     'wavy': wavy,
     'waveAmplitude': waveAmplitude,
     'shapesCount': shapesCount,
@@ -442,7 +471,11 @@ class CarDesign with _JsonEquality {
       uiScale: _num(m['uiScale'], d.uiScale, uiScaleRange),
       titleScale: _num(m['titleScale'], d.titleScale, titleScaleRange),
       controlHeight: _num(m['controlHeight'], d.controlHeight, controlHeightRange),
-      wavy: _bool(m['wavy'], d.wavy),
+      progressStyle: _enum(
+        CarProgressStyle.values,
+        m['progressStyle'],
+        _bool(m['wavy'], true) ? CarProgressStyle.wavy : CarProgressStyle.plain,
+      ),
       waveAmplitude: _num(m['waveAmplitude'], d.waveAmplitude, waveAmplitudeRange),
       shapesCount: _num(m['shapesCount'], d.shapesCount.toDouble(), shapesCountRange).round(),
       shapesOpacity: _num(m['shapesOpacity'], d.shapesOpacity, shapesOpacityRange),
@@ -643,6 +676,8 @@ class CarLyricsOpts with _JsonEquality {
     this.animFullscreen = true,
     this.scrollMs = 600,
     this.inactiveOpacity = 1.0,
+    this.maxVisible = 0,
+    this.weight = 500,
   });
 
   final double scale;
@@ -672,12 +707,20 @@ class CarLyricsOpts with _JsonEquality {
   /// Opacidad de las líneas que no suenan (1 = solo el color `outline`).
   final double inactiveOpacity;
 
+  /// Líneas visibles alrededor de la actual (0 = todas).
+  final int maxVisible;
+
+  /// Peso de la letra (300–900).
+  final int weight;
+
   static const scaleRange = CarRange(0.7, 1.8, 0.05);
   static const spacingRange = CarRange(0.5, 3.0, 0.1);
   static const offsetRange = CarRange(-1000, 2000, 50);
   static const animMsRange = CarRange(100, 800, 50);
   static const scrollMsRange = CarRange(150, 1500, 50);
   static const inactiveOpacityRange = CarRange(0.2, 1.0, 0.05);
+  static const maxVisibleRange = CarRange(0, 15, 1);
+  static const weightRange = CarRange(300, 900, 100);
 
   /// Animación que corresponde a la letra normal o a la de pantalla completa.
   CarLyricAnim animFor({bool fullscreen = false}) =>
@@ -696,6 +739,8 @@ class CarLyricsOpts with _JsonEquality {
     bool? animFullscreen,
     int? scrollMs,
     double? inactiveOpacity,
+    int? maxVisible,
+    int? weight,
   }) => CarLyricsOpts(
     scale: scale ?? this.scale,
     spacing: spacing ?? this.spacing,
@@ -709,6 +754,8 @@ class CarLyricsOpts with _JsonEquality {
     animFullscreen: animFullscreen ?? this.animFullscreen,
     scrollMs: scrollMs ?? this.scrollMs,
     inactiveOpacity: inactiveOpacity ?? this.inactiveOpacity,
+    maxVisible: maxVisible ?? this.maxVisible,
+    weight: weight ?? this.weight,
   );
 
   @override
@@ -725,6 +772,8 @@ class CarLyricsOpts with _JsonEquality {
     'animFullscreen': animFullscreen,
     'scrollMs': scrollMs,
     'inactiveOpacity': inactiveOpacity,
+    'maxVisible': maxVisible,
+    'weight': weight,
   };
 
   factory CarLyricsOpts.fromJson(Object? json) {
@@ -743,6 +792,8 @@ class CarLyricsOpts with _JsonEquality {
       animFullscreen: _bool(m['animFullscreen'], d.animFullscreen),
       scrollMs: _num(m['scrollMs'], d.scrollMs.toDouble(), scrollMsRange).round(),
       inactiveOpacity: _num(m['inactiveOpacity'], d.inactiveOpacity, inactiveOpacityRange),
+      maxVisible: _num(m['maxVisible'], d.maxVisible.toDouble(), maxVisibleRange).round(),
+      weight: (_num(m['weight'], d.weight.toDouble(), weightRange) / 100).round() * 100,
     );
   }
 }
@@ -991,6 +1042,627 @@ class CarGestureOpts with _JsonEquality {
 }
 
 // ---------------------------------------------------------------------------
+// v3: animaciones, reloj/espera, estilo, noche, controles, siempre encima, actualizaciones
+
+/// Transición entre pantallas (reproductor ⇄ letra completa ⇄ reloj ⇄ Configuración).
+enum CarScreenTransition {
+  fade('Fundido'),
+  sharedX('Eje X'),
+  sharedY('Eje Y'),
+  zoom('Zoom'),
+  none('Ninguna');
+
+  const CarScreenTransition(this.label);
+  final String label;
+}
+
+/// Animación al cambiar la portada.
+enum CarCoverChange {
+  crossfade('Fundido'),
+  slide('Deslizar'),
+  scalePop('Escala'),
+  morph('Forma');
+
+  const CarCoverChange(this.label);
+  final String label;
+}
+
+/// Modo rendimiento: menos barras, formas y desenfoque para mantener 60 fps.
+enum CarPerfMode {
+  auto('Automático'),
+  on('Siempre'),
+  off('Nunca');
+
+  const CarPerfMode(this.label);
+  final String label;
+}
+
+/// Tipografía de la interfaz.
+enum CarFont {
+  googleSans('Google Sans Flex', 'Google Sans Flex'),
+  rubik('Rubik', 'Rubik'),
+  system('Del sistema', null);
+
+  const CarFont(this.label, this.family);
+  final String label;
+
+  /// Familia de Flutter (`null` = la del sistema).
+  final String? family;
+}
+
+/// Estilo de la barra de progreso.
+enum CarProgressStyle {
+  wavy('Ondulada'),
+  plain('Plana'),
+  thin('Fina');
+
+  const CarProgressStyle(this.label);
+  final String label;
+}
+
+/// Fondo del reproductor.
+enum CarBackground {
+  shapes('Formas'),
+  blurredCover('Portada difuminada'),
+  solid('Sólido'),
+  gradient('Degradado');
+
+  const CarBackground(this.label);
+  final String label;
+}
+
+/// Bordes de los chips.
+enum CarChipCorners {
+  rounded('Redondeados'),
+  pill('Píldora');
+
+  const CarChipCorners(this.label);
+  final String label;
+}
+
+/// Qué muestra el tiempo de la izquierda.
+enum CarTimeFormat {
+  elapsed('Transcurrido'),
+  remaining('Restante');
+
+  const CarTimeFormat(this.label);
+  final String label;
+}
+
+@immutable
+class CarAnimOpts with _JsonEquality {
+  const CarAnimOpts({
+    this.splash = true,
+    this.splashMs = 1300,
+    this.transition = CarScreenTransition.fade,
+    this.transitionMs = 400,
+    this.entrance = true,
+    this.entranceMs = 550,
+    this.staggerMs = 60,
+    this.coverChange = CarCoverChange.crossfade,
+    this.chipAnim = true,
+    this.listEntrance = true,
+    this.pressIntensity = 1.0,
+    this.perf = CarPerfMode.auto,
+  });
+
+  /// Animación de inicio (logo con forma que cambia → contenido).
+  final bool splash;
+  final int splashMs;
+  final CarScreenTransition transition;
+  final int transitionMs;
+
+  /// Entrada escalonada de encabezado, portada, detalles, controles y panel.
+  final bool entrance;
+  final int entranceMs;
+  final int staggerMs;
+  final CarCoverChange coverChange;
+
+  /// Los chips de estado entran y salen con animación.
+  final bool chipAnim;
+
+  /// Las secciones de Configuración entran escalonadas.
+  final bool listEntrance;
+
+  /// Intensidad de la respuesta al presionar botones (0 = ninguna, 1 = Harmonix).
+  final double pressIntensity;
+  final CarPerfMode perf;
+
+  static const splashMsRange = CarRange(400, 3000, 100);
+  static const transitionMsRange = CarRange(150, 1200, 50);
+  static const entranceMsRange = CarRange(200, 1200, 50);
+  static const staggerMsRange = CarRange(0, 200, 10);
+  static const pressRange = CarRange(0, 2, 0.1);
+
+  CarAnimOpts copyWith({
+    bool? splash,
+    int? splashMs,
+    CarScreenTransition? transition,
+    int? transitionMs,
+    bool? entrance,
+    int? entranceMs,
+    int? staggerMs,
+    CarCoverChange? coverChange,
+    bool? chipAnim,
+    bool? listEntrance,
+    double? pressIntensity,
+    CarPerfMode? perf,
+  }) => CarAnimOpts(
+    splash: splash ?? this.splash,
+    splashMs: splashMs ?? this.splashMs,
+    transition: transition ?? this.transition,
+    transitionMs: transitionMs ?? this.transitionMs,
+    entrance: entrance ?? this.entrance,
+    entranceMs: entranceMs ?? this.entranceMs,
+    staggerMs: staggerMs ?? this.staggerMs,
+    coverChange: coverChange ?? this.coverChange,
+    chipAnim: chipAnim ?? this.chipAnim,
+    listEntrance: listEntrance ?? this.listEntrance,
+    pressIntensity: pressIntensity ?? this.pressIntensity,
+    perf: perf ?? this.perf,
+  );
+
+  @override
+  Map<String, dynamic> toJson() => {
+    'splash': splash,
+    'splashMs': splashMs,
+    'transition': transition.name,
+    'transitionMs': transitionMs,
+    'entrance': entrance,
+    'entranceMs': entranceMs,
+    'staggerMs': staggerMs,
+    'coverChange': coverChange.name,
+    'chipAnim': chipAnim,
+    'listEntrance': listEntrance,
+    'pressIntensity': pressIntensity,
+    'perf': perf.name,
+  };
+
+  factory CarAnimOpts.fromJson(Object? json) {
+    final m = _map(json);
+    const d = CarAnimOpts();
+    return CarAnimOpts(
+      splash: _bool(m['splash'], d.splash),
+      splashMs: _num(m['splashMs'], d.splashMs.toDouble(), splashMsRange).round(),
+      transition: _enum(CarScreenTransition.values, m['transition'], d.transition),
+      transitionMs: _num(m['transitionMs'], d.transitionMs.toDouble(), transitionMsRange).round(),
+      entrance: _bool(m['entrance'], d.entrance),
+      entranceMs: _num(m['entranceMs'], d.entranceMs.toDouble(), entranceMsRange).round(),
+      staggerMs: _num(m['staggerMs'], d.staggerMs.toDouble(), staggerMsRange).round(),
+      coverChange: _enum(CarCoverChange.values, m['coverChange'], d.coverChange),
+      chipAnim: _bool(m['chipAnim'], d.chipAnim),
+      listEntrance: _bool(m['listEntrance'], d.listEntrance),
+      pressIntensity: _num(m['pressIntensity'], d.pressIntensity, pressRange),
+      perf: _enum(CarPerfMode.values, m['perf'], d.perf),
+    );
+  }
+}
+
+/// Reloj de espera (protector de pantalla).
+@immutable
+class CarStandbyOpts with _JsonEquality {
+  const CarStandbyOpts({
+    this.idleMinutes = 10,
+    this.whenDisconnected = false,
+    this.use24h = true,
+    this.seconds = false,
+    this.date = true,
+    this.cover = true,
+    this.shapes = true,
+    this.burnIn = true,
+    this.clockScale = 1.0,
+  });
+
+  /// Sin nada sonando durante N minutos se muestra el reloj (0 = nunca).
+  final int idleMinutes;
+
+  /// Sin celular conectado se muestra el reloj en vez de la pantalla de espera.
+  final bool whenDisconnected;
+  final bool use24h;
+  final bool seconds;
+  final bool date;
+
+  /// La portada de lo último que sonó, chiquita.
+  final bool cover;
+
+  /// Formas que flotan despacio detrás del reloj.
+  final bool shapes;
+
+  /// Corre todo unos píxeles cada minuto (protege pantallas OLED/LCD de marcas).
+  final bool burnIn;
+  final double clockScale;
+
+  static const idleRange = CarRange(0, 60, 1);
+  static const clockScaleRange = CarRange(0.6, 1.4, 0.05);
+
+  CarStandbyOpts copyWith({
+    int? idleMinutes,
+    bool? whenDisconnected,
+    bool? use24h,
+    bool? seconds,
+    bool? date,
+    bool? cover,
+    bool? shapes,
+    bool? burnIn,
+    double? clockScale,
+  }) => CarStandbyOpts(
+    idleMinutes: idleMinutes ?? this.idleMinutes,
+    whenDisconnected: whenDisconnected ?? this.whenDisconnected,
+    use24h: use24h ?? this.use24h,
+    seconds: seconds ?? this.seconds,
+    date: date ?? this.date,
+    cover: cover ?? this.cover,
+    shapes: shapes ?? this.shapes,
+    burnIn: burnIn ?? this.burnIn,
+    clockScale: clockScale ?? this.clockScale,
+  );
+
+  @override
+  Map<String, dynamic> toJson() => {
+    'idleMinutes': idleMinutes,
+    'whenDisconnected': whenDisconnected,
+    'use24h': use24h,
+    'seconds': seconds,
+    'date': date,
+    'cover': cover,
+    'shapes': shapes,
+    'burnIn': burnIn,
+    'clockScale': clockScale,
+  };
+
+  factory CarStandbyOpts.fromJson(Object? json) {
+    final m = _map(json);
+    const d = CarStandbyOpts();
+    return CarStandbyOpts(
+      idleMinutes: _num(m['idleMinutes'], d.idleMinutes.toDouble(), idleRange).round(),
+      whenDisconnected: _bool(m['whenDisconnected'], d.whenDisconnected),
+      use24h: _bool(m['use24h'], d.use24h),
+      seconds: _bool(m['seconds'], d.seconds),
+      date: _bool(m['date'], d.date),
+      cover: _bool(m['cover'], d.cover),
+      shapes: _bool(m['shapes'], d.shapes),
+      burnIn: _bool(m['burnIn'], d.burnIn),
+      clockScale: _num(m['clockScale'], d.clockScale, clockScaleRange),
+    );
+  }
+}
+
+/// Tipografía y disposición del reproductor.
+@immutable
+class CarStyleOpts with _JsonEquality {
+  const CarStyleOpts({
+    this.font = CarFont.googleSans,
+    this.titleWeight = 500,
+    this.letterSpacing = -0.01,
+    this.headerHeight = 60,
+    this.sidePanelPct = 0,
+    this.coverRight = false,
+    this.controlsBottom = false,
+    this.timeFormat = CarTimeFormat.elapsed,
+    this.showRemaining = false,
+    this.background = CarBackground.shapes,
+    this.backgroundDim = 0,
+    this.chipCorners = CarChipCorners.rounded,
+    this.haptics = true,
+  });
+
+  final CarFont font;
+
+  /// Peso del título (300–900, fuente variable).
+  final int titleWeight;
+
+  /// Espaciado de letras del título (em).
+  final double letterSpacing;
+
+  /// Alto del encabezado (px, incluye el margen de arriba).
+  final double headerHeight;
+
+  /// Ancho del panel lateral en % del escenario (0 = automático).
+  final int sidePanelPct;
+
+  /// Portada a la derecha (la fila se invierte).
+  final bool coverRight;
+
+  /// Controles en una barra abajo a todo el ancho (en vez de debajo de los datos).
+  final bool controlsBottom;
+  final CarTimeFormat timeFormat;
+
+  /// A la derecha, el tiempo restante (−m:ss) en vez de la duración.
+  final bool showRemaining;
+  final CarBackground background;
+
+  /// Oscurece el fondo (0–0,8).
+  final double backgroundDim;
+  final CarChipCorners chipCorners;
+
+  /// Vibración corta al tocar los controles.
+  final bool haptics;
+
+  static const titleWeightRange = CarRange(300, 900, 100);
+  static const letterSpacingRange = CarRange(-0.05, 0.1, 0.005);
+  static const headerHeightRange = CarRange(44, 96, 2);
+  static const sidePanelRange = CarRange(0, 60, 5);
+  static const backgroundDimRange = CarRange(0, 0.8, 0.05);
+
+  CarStyleOpts copyWith({
+    CarFont? font,
+    int? titleWeight,
+    double? letterSpacing,
+    double? headerHeight,
+    int? sidePanelPct,
+    bool? coverRight,
+    bool? controlsBottom,
+    CarTimeFormat? timeFormat,
+    bool? showRemaining,
+    CarBackground? background,
+    double? backgroundDim,
+    CarChipCorners? chipCorners,
+    bool? haptics,
+  }) => CarStyleOpts(
+    font: font ?? this.font,
+    titleWeight: titleWeight ?? this.titleWeight,
+    letterSpacing: letterSpacing ?? this.letterSpacing,
+    headerHeight: headerHeight ?? this.headerHeight,
+    sidePanelPct: sidePanelPct ?? this.sidePanelPct,
+    coverRight: coverRight ?? this.coverRight,
+    controlsBottom: controlsBottom ?? this.controlsBottom,
+    timeFormat: timeFormat ?? this.timeFormat,
+    showRemaining: showRemaining ?? this.showRemaining,
+    background: background ?? this.background,
+    backgroundDim: backgroundDim ?? this.backgroundDim,
+    chipCorners: chipCorners ?? this.chipCorners,
+    haptics: haptics ?? this.haptics,
+  );
+
+  @override
+  Map<String, dynamic> toJson() => {
+    'font': font.name,
+    'titleWeight': titleWeight,
+    'letterSpacing': letterSpacing,
+    'headerHeight': headerHeight,
+    'sidePanelPct': sidePanelPct,
+    'coverRight': coverRight,
+    'controlsBottom': controlsBottom,
+    'timeFormat': timeFormat.name,
+    'showRemaining': showRemaining,
+    'background': background.name,
+    'backgroundDim': backgroundDim,
+    'chipCorners': chipCorners.name,
+    'haptics': haptics,
+  };
+
+  factory CarStyleOpts.fromJson(Object? json) {
+    final m = _map(json);
+    const d = CarStyleOpts();
+    return CarStyleOpts(
+      font: _enum(CarFont.values, m['font'], d.font),
+      titleWeight: (_num(m['titleWeight'], d.titleWeight.toDouble(), titleWeightRange) / 100).round() * 100,
+      letterSpacing: _num(m['letterSpacing'], d.letterSpacing, letterSpacingRange),
+      headerHeight: _num(m['headerHeight'], d.headerHeight, headerHeightRange),
+      sidePanelPct: _num(m['sidePanelPct'], d.sidePanelPct.toDouble(), sidePanelRange).round(),
+      coverRight: _bool(m['coverRight'], d.coverRight),
+      controlsBottom: _bool(m['controlsBottom'], d.controlsBottom),
+      timeFormat: _enum(CarTimeFormat.values, m['timeFormat'], d.timeFormat),
+      showRemaining: _bool(m['showRemaining'], d.showRemaining),
+      background: _enum(CarBackground.values, m['background'], d.background),
+      backgroundDim: _num(m['backgroundDim'], d.backgroundDim, backgroundDimRange),
+      chipCorners: _enum(CarChipCorners.values, m['chipCorners'], d.chipCorners),
+      haptics: _bool(m['haptics'], d.haptics),
+    );
+  }
+}
+
+/// Modo noche: atenúa la pantalla en un horario (y el tema "Por horario" usa el mismo).
+@immutable
+class CarNightOpts with _JsonEquality {
+  const CarNightOpts({this.dim = false, this.start = 19 * 60, this.end = 6 * 60 + 30, this.dimAmount = 0.35});
+
+  final bool dim;
+
+  /// Minutos desde la medianoche.
+  final int start;
+  final int end;
+
+  /// Cuánto se oscurece (0,05–0,8).
+  final double dimAmount;
+
+  static const minuteRange = CarRange(0, 1439, 15);
+  static const dimRange = CarRange(0.05, 0.8, 0.05);
+
+  /// ¿[now] cae dentro del horario de noche? (cruza la medianoche si start > end).
+  bool isNight(DateTime now) {
+    final m = now.hour * 60 + now.minute;
+    if (start == end) return false;
+    return start < end ? (m >= start && m < end) : (m >= start || m < end);
+  }
+
+  CarNightOpts copyWith({bool? dim, int? start, int? end, double? dimAmount}) => CarNightOpts(
+    dim: dim ?? this.dim,
+    start: start ?? this.start,
+    end: end ?? this.end,
+    dimAmount: dimAmount ?? this.dimAmount,
+  );
+
+  @override
+  Map<String, dynamic> toJson() => {'dim': dim, 'start': start, 'end': end, 'dimAmount': dimAmount};
+
+  factory CarNightOpts.fromJson(Object? json) {
+    final m = _map(json);
+    const d = CarNightOpts();
+    return CarNightOpts(
+      dim: _bool(m['dim'], d.dim),
+      start: _num(m['start'], d.start.toDouble(), minuteRange).round(),
+      end: _num(m['end'], d.end.toDouble(), minuteRange).round(),
+      dimAmount: _num(m['dimAmount'], d.dimAmount, dimRange),
+    );
+  }
+}
+
+/// Aleatorio / repetir / me gusta y la cola.
+@immutable
+class CarControlsOpts with _JsonEquality {
+  const CarControlsOpts({this.hideUnavailable = true, this.queueTapToSkip = true, this.queueCovers = true});
+
+  /// Oculta aleatorio / repetir / me gusta si la app del celular no los permite (si no, se
+  /// ven deshabilitados).
+  final bool hideUnavailable;
+
+  /// Tocar un tema de "A continuación" salta a ese tema.
+  final bool queueTapToSkip;
+
+  /// Miniaturas en "A continuación".
+  final bool queueCovers;
+
+  CarControlsOpts copyWith({bool? hideUnavailable, bool? queueTapToSkip, bool? queueCovers}) => CarControlsOpts(
+    hideUnavailable: hideUnavailable ?? this.hideUnavailable,
+    queueTapToSkip: queueTapToSkip ?? this.queueTapToSkip,
+    queueCovers: queueCovers ?? this.queueCovers,
+  );
+
+  @override
+  Map<String, dynamic> toJson() => {
+    'hideUnavailable': hideUnavailable,
+    'queueTapToSkip': queueTapToSkip,
+    'queueCovers': queueCovers,
+  };
+
+  factory CarControlsOpts.fromJson(Object? json) {
+    final m = _map(json);
+    const d = CarControlsOpts();
+    return CarControlsOpts(
+      hideUnavailable: _bool(m['hideUnavailable'], d.hideUnavailable),
+      queueTapToSkip: _bool(m['queueTapToSkip'], d.queueTapToSkip),
+      queueCovers: _bool(m['queueCovers'], d.queueCovers),
+    );
+  }
+}
+
+/// Mantener Pixel Car Player encima de otras apps (p. ej. la de música Bluetooth) y la
+/// burbuja flotante.
+@immutable
+class CarKeepFrontOpts with _JsonEquality {
+  const CarKeepFrontOpts({
+    this.enabled = false,
+    this.apps = const {},
+    this.anyApp = false,
+    this.includeLauncher = false,
+    this.delayMs = 1500,
+    this.bubble = false,
+    this.bubbleSize = 64,
+    this.bubbleOpacity = 0.9,
+  });
+
+  /// Volver a Pixel Car Player cuando se abran [apps] (o cualquiera con [anyApp]).
+  final bool enabled;
+
+  /// Paquete → nombre visible.
+  final Map<String, String> apps;
+  final bool anyApp;
+
+  /// Con "cualquier app", también al volver a la pantalla de inicio (launcher).
+  final bool includeLauncher;
+  final int delayMs;
+  final bool bubble;
+  final int bubbleSize;
+  final double bubbleOpacity;
+
+  static const delayRange = CarRange(0, 10000, 250);
+  static const bubbleSizeRange = CarRange(40, 120, 4);
+  static const bubbleOpacityRange = CarRange(0.3, 1, 0.05);
+
+  CarKeepFrontOpts copyWith({
+    bool? enabled,
+    Map<String, String>? apps,
+    bool? anyApp,
+    bool? includeLauncher,
+    int? delayMs,
+    bool? bubble,
+    int? bubbleSize,
+    double? bubbleOpacity,
+  }) => CarKeepFrontOpts(
+    enabled: enabled ?? this.enabled,
+    apps: apps ?? this.apps,
+    anyApp: anyApp ?? this.anyApp,
+    includeLauncher: includeLauncher ?? this.includeLauncher,
+    delayMs: delayMs ?? this.delayMs,
+    bubble: bubble ?? this.bubble,
+    bubbleSize: bubbleSize ?? this.bubbleSize,
+    bubbleOpacity: bubbleOpacity ?? this.bubbleOpacity,
+  );
+
+  /// Config para `setKeepInFront` ([fallback] = la app acompañante si no se eligió ninguna).
+  Map<String, dynamic> nativeConfig({String fallback = ''}) => {
+    'enabled': enabled,
+    'packages': apps.isEmpty && fallback.isNotEmpty && !anyApp ? [fallback] : apps.keys.toList(),
+    'anyApp': anyApp,
+    'includeLauncher': includeLauncher,
+    'delayMs': delayMs,
+  };
+
+  Map<String, dynamic> bubbleConfig() => {'enabled': bubble, 'size': bubbleSize, 'opacity': bubbleOpacity};
+
+  @override
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled,
+    'apps': apps,
+    'anyApp': anyApp,
+    'includeLauncher': includeLauncher,
+    'delayMs': delayMs,
+    'bubble': bubble,
+    'bubbleSize': bubbleSize,
+    'bubbleOpacity': bubbleOpacity,
+  };
+
+  factory CarKeepFrontOpts.fromJson(Object? json) {
+    final m = _map(json);
+    const d = CarKeepFrontOpts();
+    final apps = <String, String>{};
+    for (final e in _map(m['apps']).entries) {
+      if (e.key.isEmpty || e.key.length > 256 || apps.length >= 32) continue;
+      apps[e.key] = _str(e.value, e.key, 128);
+    }
+    return CarKeepFrontOpts(
+      enabled: _bool(m['enabled'], d.enabled),
+      apps: Map.unmodifiable(apps),
+      anyApp: _bool(m['anyApp'], d.anyApp),
+      includeLauncher: _bool(m['includeLauncher'], d.includeLauncher),
+      delayMs: _num(m['delayMs'], d.delayMs.toDouble(), delayRange).round(),
+      bubble: _bool(m['bubble'], d.bubble),
+      bubbleSize: _num(m['bubbleSize'], d.bubbleSize.toDouble(), bubbleSizeRange).round(),
+      bubbleOpacity: _num(m['bubbleOpacity'], d.bubbleOpacity, bubbleOpacityRange),
+    );
+  }
+}
+
+@immutable
+class CarUpdateOpts with _JsonEquality {
+  const CarUpdateOpts({this.autoCheck = true, this.backupBeforeInstall = true});
+
+  /// Buscar actualizaciones al iniciar (una vez por día).
+  final bool autoCheck;
+
+  /// Exportar la configuración a un archivo antes de instalar.
+  final bool backupBeforeInstall;
+
+  CarUpdateOpts copyWith({bool? autoCheck, bool? backupBeforeInstall}) => CarUpdateOpts(
+    autoCheck: autoCheck ?? this.autoCheck,
+    backupBeforeInstall: backupBeforeInstall ?? this.backupBeforeInstall,
+  );
+
+  @override
+  Map<String, dynamic> toJson() => {'autoCheck': autoCheck, 'backupBeforeInstall': backupBeforeInstall};
+
+  factory CarUpdateOpts.fromJson(Object? json) {
+    final m = _map(json);
+    const d = CarUpdateOpts();
+    return CarUpdateOpts(
+      autoCheck: _bool(m['autoCheck'], d.autoCheck),
+      backupBeforeInstall: _bool(m['backupBeforeInstall'], d.backupBeforeInstall),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Todo junto
 
 @immutable
@@ -1006,6 +1678,13 @@ class CarCustomization {
     this.startup = const CarStartupOpts(),
     this.hotspot = const CarHotspotOpts(),
     this.gestures = const CarGestureOpts(),
+    this.anim = const CarAnimOpts(),
+    this.standby = const CarStandbyOpts(),
+    this.style = const CarStyleOpts(),
+    this.night = const CarNightOpts(),
+    this.controls = const CarControlsOpts(),
+    this.keepFront = const CarKeepFrontOpts(),
+    this.updates = const CarUpdateOpts(),
   });
 
   static const defaults = CarCustomization();
@@ -1021,6 +1700,13 @@ class CarCustomization {
   final CarStartupOpts startup;
   final CarHotspotOpts hotspot;
   final CarGestureOpts gestures;
+  final CarAnimOpts anim;
+  final CarStandbyOpts standby;
+  final CarStyleOpts style;
+  final CarNightOpts night;
+  final CarControlsOpts controls;
+  final CarKeepFrontOpts keepFront;
+  final CarUpdateOpts updates;
 
   /// Atajo: ¿se ve el elemento?
   bool show(CarElement e) => visibility[e];
@@ -1039,6 +1725,13 @@ class CarCustomization {
     CarStartupOpts? startup,
     CarHotspotOpts? hotspot,
     CarGestureOpts? gestures,
+    CarAnimOpts? anim,
+    CarStandbyOpts? standby,
+    CarStyleOpts? style,
+    CarNightOpts? night,
+    CarControlsOpts? controls,
+    CarKeepFrontOpts? keepFront,
+    CarUpdateOpts? updates,
   }) => CarCustomization(
     design: design ?? this.design,
     cover: cover ?? this.cover,
@@ -1050,6 +1743,13 @@ class CarCustomization {
     startup: startup ?? this.startup,
     hotspot: hotspot ?? this.hotspot,
     gestures: gestures ?? this.gestures,
+    anim: anim ?? this.anim,
+    standby: standby ?? this.standby,
+    style: style ?? this.style,
+    night: night ?? this.night,
+    controls: controls ?? this.controls,
+    keepFront: keepFront ?? this.keepFront,
+    updates: updates ?? this.updates,
   );
 
   /// Devuelve una copia con [section] en sus valores por defecto.
@@ -1064,6 +1764,13 @@ class CarCustomization {
     CarSection.startup => copyWith(startup: const CarStartupOpts()),
     CarSection.hotspot => copyWith(hotspot: const CarHotspotOpts()),
     CarSection.gestures => copyWith(gestures: const CarGestureOpts()),
+    CarSection.animations => copyWith(anim: const CarAnimOpts()),
+    CarSection.standby => copyWith(standby: const CarStandbyOpts()),
+    CarSection.style => copyWith(style: const CarStyleOpts()),
+    CarSection.night => copyWith(night: const CarNightOpts()),
+    CarSection.controls => copyWith(controls: const CarControlsOpts()),
+    CarSection.keepFront => copyWith(keepFront: const CarKeepFrontOpts()),
+    CarSection.updates => copyWith(updates: const CarUpdateOpts()),
   };
 
   /// ¿La sección está en sus valores por defecto?
@@ -1081,6 +1788,13 @@ class CarCustomization {
     'startup': startup.toJson(),
     'hotspot': hotspot.toJson(),
     'gestures': gestures.toJson(),
+    'anim': anim.toJson(),
+    'standby': standby.toJson(),
+    'style': style.toJson(),
+    'night': night.toJson(),
+    'controls': controls.toJson(),
+    'keepFront': keepFront.toJson(),
+    'updates': updates.toJson(),
   };
 
   /// Lee un JSON; lo que falte o sea inválido toma el valor por defecto.
@@ -1098,6 +1812,13 @@ class CarCustomization {
       startup: CarStartupOpts.fromJson(m['startup']),
       hotspot: CarHotspotOpts.fromJson(m['hotspot']),
       gestures: CarGestureOpts.fromJson(m['gestures']),
+      anim: CarAnimOpts.fromJson(m['anim']),
+      standby: CarStandbyOpts.fromJson(m['standby']),
+      style: CarStyleOpts.fromJson(m['style']),
+      night: CarNightOpts.fromJson(m['night']),
+      controls: CarControlsOpts.fromJson(m['controls']),
+      keepFront: CarKeepFrontOpts.fromJson(m['keepFront']),
+      updates: CarUpdateOpts.fromJson(m['updates']),
     );
   }
 
@@ -1124,11 +1845,35 @@ class CarCustomization {
       other.connection == connection &&
       other.startup == startup &&
       other.hotspot == hotspot &&
-      other.gestures == gestures;
+      other.gestures == gestures &&
+      other.anim == anim &&
+      other.standby == standby &&
+      other.style == style &&
+      other.night == night &&
+      other.controls == controls &&
+      other.keepFront == keepFront &&
+      other.updates == updates;
 
   @override
-  int get hashCode =>
-      Object.hash(design, cover, visualizer, lyrics, visibility, texts, connection, startup, hotspot, gestures);
+  int get hashCode => Object.hash(
+    design,
+    cover,
+    visualizer,
+    lyrics,
+    visibility,
+    texts,
+    connection,
+    startup,
+    hotspot,
+    gestures,
+    anim,
+    standby,
+    style,
+    night,
+    controls,
+    keepFront,
+    updates,
+  );
 }
 
 // ---------------------------------------------------------------------------

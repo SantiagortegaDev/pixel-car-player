@@ -252,8 +252,7 @@ class _HotspotCardState extends State<HotspotCard> {
               child: HxTextField(
                 controller: _ip,
                 label: 'IP del carro (opcional)',
-                helper:
-                    'Solo si no se conectan solos: la IP de la tableta, p. ej. 192.168.43.1.',
+                helper: 'Solo si no se conectan solos: la IP de la tableta, p. ej. 192.168.43.1.',
                 keyboardType: TextInputType.number,
                 onChanged: c.setCarIp,
               ),

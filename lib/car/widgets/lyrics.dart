@@ -86,6 +86,8 @@ class HxLyrics extends StatelessWidget {
         inactiveOpacity: o.inactiveOpacity,
         lead: Duration(milliseconds: o.offsetMs),
         reduced: red,
+        weight: o.weight,
+        maxVisible: o.maxVisible,
       );
     } else if (ok) {
       status = 'plain';
@@ -222,6 +224,8 @@ class _LyricList extends StatefulWidget {
     required this.inactiveOpacity,
     required this.lead,
     required this.reduced,
+    this.weight = 500,
+    this.maxVisible = 0,
   });
 
   final NowPlaying np;
@@ -239,6 +243,12 @@ class _LyricList extends StatefulWidget {
   final double inactiveOpacity;
   final Duration lead;
   final bool reduced;
+
+  /// Peso de la letra.
+  final int weight;
+
+  /// Líneas visibles alrededor de la actual (0 = todas).
+  final int maxVisible;
 
   List<LyricLine> get lines => np.lyrics;
 
@@ -328,7 +338,16 @@ class _LyricListState extends State<_LyricList> {
 
   @override
   Widget build(BuildContext context) {
-    final base = hxWeight(context.tt.titleLarge, 500).copyWith(fontSize: widget.fontSize, height: 1.3);
+    final base = hxWeight(context.tt.titleLarge, widget.weight).copyWith(fontSize: widget.fontSize, height: 1.3);
+    final maxVis = widget.maxVisible;
+    bool visible(int i) {
+      if (maxVis <= 0) return true;
+      final center = math.max(0, _active);
+      // Un poco más arriba que abajo: la actual queda cerca del 30 % del panel.
+      final before = (maxVis - 1) ~/ 3;
+      return i >= center - before && i < center - before + maxVis;
+    }
+
     final anim = widget.reduced ? CarLyricAnim.none : widget.anim;
     // Karaoke con animaciones reducidas: la línea actual completa, sin relleno progresivo.
     final karaoke = widget.anim == CarLyricAnim.karaoke && !widget.reduced;
@@ -367,7 +386,10 @@ class _LyricListState extends State<_LyricList> {
                         onDoubleTap: widget.seek == CarSeekMode.doubleTap
                             ? () => widget.onSeek(widget.lines[i].time)
                             : null,
-                        child: Padding(
+                        child: AnimatedOpacity(
+                          opacity: visible(i) ? 1 : 0,
+                          duration: duration == Duration.zero ? Duration.zero : HxMotion.dFxSlow,
+                          child: Padding(
                           padding: const EdgeInsets.symmetric(vertical: 4),
                           child: LyricLineView(
                             text: widget.lines[i].isGap ? '. . .' : widget.lines[i].text,
@@ -381,6 +403,7 @@ class _LyricListState extends State<_LyricList> {
                             inactiveOpacity: widget.inactiveOpacity,
                             progress: karaoke && i == _active ? _karaoke : null,
                           ),
+                        ),
                         ),
                       ),
                     ),

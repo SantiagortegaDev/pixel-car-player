@@ -2,6 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 import 'package:pixel_car_player/data/bridge/native_bridge.dart';
+import 'package:pixel_car_player/phone/controllers/auto_start_controller.dart';
+import 'package:pixel_car_player/phone/controllers/pairing_controller.dart';
+import 'package:pixel_car_player/phone/controllers/phone_settings.dart';
+import 'package:pixel_car_player/phone/controllers/updates_controller.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// App de la que se leen los metadatos.
@@ -20,10 +24,18 @@ class ConnectedCar {
     required this.device,
     required this.transport,
     required this.address,
+    this.authenticated,
+    this.pairing = false,
   });
   final String device;
   final String transport; // wifi | bt
   final String address;
+
+  /// v3: null = el nativo no lo informa (versiones anteriores).
+  final bool? authenticated;
+
+  /// v3: esperando el código de emparejamiento.
+  final bool pairing;
   bool get isBluetooth => transport == 'bt';
 }
 
@@ -71,6 +83,10 @@ class TransmitterStatus {
               device: '${c['device'] ?? 'Tableta'}',
               transport: '${c['transport'] ?? 'wifi'}',
               address: '${c['address'] ?? ''}',
+              authenticated: c['authenticated'] is bool
+                  ? c['authenticated'] as bool
+                  : null,
+              pairing: c['pairing'] == true,
             ),
           )
           .toList(),
@@ -100,6 +116,22 @@ class PhoneController extends ChangeNotifier with WidgetsBindingObserver {
   static const _kCarIp = 'phone_car_ip';
 
   bool get supported => _bridge.isSupported;
+
+  // v3: sub-controladores (cada uno notifica por su cuenta).
+  late final PhoneSettings settings = PhoneSettings();
+  late final PairingController pairing = PairingController(
+    _bridge,
+    supported: supported,
+  );
+  late final AutoStartController carAutoStart = AutoStartController(
+    _bridge,
+    supported: supported,
+  );
+  late final UpdatesController updates = UpdatesController(
+    _bridge,
+    supported: supported,
+  );
+  bool _initStarted = false;
 
   TransmitterStatus status = const TransmitterStatus();
   SourceApp source = SourceApp.spotify;
@@ -141,7 +173,12 @@ class PhoneController extends ChangeNotifier with WidgetsBindingObserver {
   bool get runtimeOk => bluetoothPermission && notificationsPermission;
 
   Future<void> init() async {
+    if (_initStarted) return;
+    _initStarted = true;
     WidgetsBinding.instance.addObserver(this);
+    // Apariencia primero (la pantalla de arranque tapa esta espera).
+    await settings.load();
+    if (_disposed) return;
     try {
       final p = await SharedPreferences.getInstance();
       final pkg = p.getString(_kSource);
@@ -156,6 +193,7 @@ class PhoneController extends ChangeNotifier with WidgetsBindingObserver {
       carIp = p.getString(_kCarIp) ?? '';
     } catch (_) {}
     hotspotLoaded = true;
+    _initV3();
 
     if (!supported) {
       // Demo para web / capturas.
@@ -186,16 +224,7 @@ class PhoneController extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
 
-    _sub = _bridge.events.listen((e) {
-      if (e['type'] == 'transmitterStatus') _applyStatus(e);
-      if (e['type'] == 'hotspotReceived') {
-        if (e['ok'] == false) {
-          reloadHotspotPrefs().then((_) => _notify());
-        } else {
-          onHotspotReceived('${e['ssid'] ?? ''}');
-        }
-      }
-    });
+    _sub = _bridge.events.listen(handleEvent);
     await refreshPermissions();
     _applyStatus(await _bridge.getTransmitterStatus());
     localIps = await _bridge.getLocalIps();
@@ -216,11 +245,77 @@ class PhoneController extends ChangeNotifier with WidgetsBindingObserver {
     await refreshWifi();
   }
 
+  /// Despacha un evento nativo (`pcp/events`). Público para que las pruebas puedan
+  /// inyectar eventos (p. ej. `pairNeeded`) sin plataforma.
+  void handleEvent(Map<String, dynamic> e) {
+    if (_disposed) return;
+    switch (e['type']) {
+      case 'transmitterStatus':
+        _applyStatus(e);
+      case 'hotspotReceived':
+        if (e['ok'] == false) {
+          reloadHotspotPrefs().then((_) => _notify());
+        } else {
+          onHotspotReceived('${e['ssid'] ?? ''}');
+        }
+      case 'pairNeeded' || 'pairResult':
+        pairing.handleEvent(e);
+      case 'updateProgress' || 'updateState':
+        updates.handleEvent(e);
+    }
+  }
+
+  Future<void> _initV3() async {
+    await Future.wait([pairing.init(), carAutoStart.init(), updates.init()]);
+    if (_disposed) return;
+    await updates.maybeAutoCheck();
+  }
+
+  /// Restaura una copia (JSON) y vuelve a aplicar lo que vive en el nativo: reglas de
+  /// encendido automático y red del hotspot del carro.
+  Future<({bool ok, String message})> restoreBackup(String json) async {
+    final int n;
+    try {
+      n = await PhoneBackup.restore(json);
+    } on FormatException catch (e) {
+      return (ok: false, message: e.message);
+    } catch (e) {
+      return (ok: false, message: 'No se pudo restaurar: $e');
+    }
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.reload();
+      source = SourceApp.values.firstWhere(
+        (s) => s.name == p.getString(_kSource),
+        orElse: () => SourceApp.spotify,
+      );
+      autoStart = p.getBool(_kAutoStart) ?? true;
+    } catch (_) {}
+    await reloadHotspotPrefs();
+    await settings.load();
+    await pairing.init();
+    await carAutoStart.loadPrefs();
+    await carAutoStart.apply();
+    if (supported && hotspotSsid.isNotEmpty) {
+      try {
+        await _bridge.setHotspotAutoConnect(
+          ssid: hotspotSsid,
+          password: hotspotPassword,
+          enabled: hotspotAuto,
+        );
+      } catch (_) {}
+    }
+    _notify();
+    return (ok: true, message: 'Copia restaurada: $n ajustes aplicados.');
+  }
+
   /// La tableta mandó las credenciales de su hotspot: el nativo ya las guardó en
   /// las prefs, aquí se recargan y se avisa a la UI.
   Future<void> onHotspotReceived(String ssid) async {
     await reloadHotspotPrefs();
-    receivedSsid = ssid.isNotEmpty ? ssid : (hotspotSsid.isNotEmpty ? hotspotSsid : null);
+    receivedSsid = ssid.isNotEmpty
+        ? ssid
+        : (hotspotSsid.isNotEmpty ? hotspotSsid : null);
     receivedTick++;
     _notify();
     refreshWifi();
@@ -255,7 +350,9 @@ class PhoneController extends ChangeNotifier with WidgetsBindingObserver {
     if (_disposed) return;
     try {
       final d = await _bridge.getLinkDiagnostics();
-      final lines = ((d['lines'] as List?) ?? const []).map((e) => '$e').toList();
+      final lines = ((d['lines'] as List?) ?? const [])
+          .map((e) => '$e')
+          .toList();
       var nets = ((d['networks'] as List?) ?? const [])
           .whereType<Map>()
           .map((e) => Map<String, dynamic>.from(e))
@@ -348,7 +445,8 @@ class PhoneController extends ChangeNotifier with WidgetsBindingObserver {
       if (!supported) {
         return (
           ok: true,
-          message: 'Guardado (la conexión automática solo funciona en el celular).',
+          message:
+              'Guardado (la conexión automática solo funciona en el celular).',
         );
       }
       final r = await _bridge.setHotspotAutoConnect(
@@ -457,6 +555,12 @@ class PhoneController extends ChangeNotifier with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && supported) {
+      pairing.refreshPaired();
+      updates.refreshInstallPermission();
+      // Volvió del instalador (cancelado o falló): sale del estado "instalando".
+      if (updates.phase == UpdatePhase.installing) {
+        updates.handleEvent(const {'type': 'updateState', 'state': 'idle'});
+      }
       refreshPermissions();
       refreshWifi();
       reloadHotspotPrefs().then((_) => _notify());
@@ -472,6 +576,10 @@ class PhoneController extends ChangeNotifier with WidgetsBindingObserver {
     _disposed = true;
     WidgetsBinding.instance.removeObserver(this);
     _sub?.cancel();
+    settings.dispose();
+    pairing.dispose();
+    carAutoStart.dispose();
+    updates.dispose();
     super.dispose();
   }
 }

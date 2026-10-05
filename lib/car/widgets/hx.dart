@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:pixel_car_player/car/custom/car_custom_scope.dart';
+import 'package:pixel_car_player/car/custom/car_customization.dart';
 import 'package:pixel_car_player/core/theme/app_theme.dart';
 
 /// Primitivas visuales de Harmonix v2 (web/src/app.css + componentes chicos) para la
@@ -123,6 +124,8 @@ class HxChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = context.cs;
     final fg = on ? cs.onSecondaryContainer : cs.onSurfaceVariant;
+    final pill = CarCustomScope.of(context).style.chipCorners == CarChipCorners.pill;
+    final r = pill ? 18.0 : HxRadius.sV;
     return Semantics(
       button: onTap != null,
       toggled: on,
@@ -133,15 +136,15 @@ class HxChip extends StatelessWidget {
         constraints: BoxConstraints(maxWidth: maxWidth ?? double.infinity),
         decoration: BoxDecoration(
           color: on ? cs.secondaryContainer : cs.secondaryContainer.withValues(alpha: 0),
-          borderRadius: HxRadius.s,
+          borderRadius: BorderRadius.circular(r),
           border: Border.all(color: on ? cs.outlineVariant.withValues(alpha: 0) : cs.outlineVariant),
         ),
         child: _Tap(
-          radius: HxRadius.sV - 1,
+          radius: r - 1,
           fg: fg,
           onTap: onTap,
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(9, 0, 15, 0),
+            padding: EdgeInsets.fromLTRB(pill ? 12 : 9, 0, pill ? 16 : 15, 0),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [

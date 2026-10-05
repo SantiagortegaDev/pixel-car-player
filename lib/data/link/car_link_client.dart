@@ -4,11 +4,13 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:pixel_car_player/data/bridge/native_bridge.dart';
 
+import 'link_auth.dart';
 import 'link_diagnostics.dart';
 import 'link_prefs.dart';
 import 'link_protocol.dart';
 import 'link_transport.dart';
 
+export 'link_auth.dart';
 export 'link_diagnostics.dart';
 
 enum LinkPhase { disconnected, searching, connected }
@@ -16,7 +18,14 @@ enum LinkPhase { disconnected, searching, connected }
 /// Estado de la conexión con el celular.
 @immutable
 class LinkStatus {
-  const LinkStatus._(this.phase, {this.device, this.transport, this.address, this.inbound = false});
+  const LinkStatus._(
+    this.phase, {
+    this.device,
+    this.transport,
+    this.address,
+    this.inbound = false,
+    this.authenticated = false,
+  });
 
   static const disconnected = LinkStatus._(LinkPhase.disconnected);
   static const searching = LinkStatus._(LinkPhase.searching);
@@ -26,7 +35,15 @@ class LinkStatus {
     required String transport,
     required String address,
     bool inbound = false,
-  }) : this._(LinkPhase.connected, device: device, transport: transport, address: address, inbound: inbound);
+    bool authenticated = true,
+  }) : this._(
+         LinkPhase.connected,
+         device: device,
+         transport: transport,
+         address: address,
+         inbound: inbound,
+         authenticated: authenticated,
+       );
 
   final LinkPhase phase;
 
@@ -42,10 +59,32 @@ class LinkStatus {
   /// La conexión la inició el celular (v2).
   final bool inbound;
 
+  /// La sesión está autenticada (v3: `auth` válido, emparejado o sin exigir emparejamiento).
+  final bool authenticated;
+
   bool get isConnected => phase == LinkPhase.connected;
 
+  /// Conectado y autenticado: ya pueden fluir los datos.
+  bool get isLinked => isConnected && authenticated;
+
   LinkStatus withDevice(String d) => isConnected
-      ? LinkStatus.connected(device: d, transport: transport!, address: address!, inbound: inbound)
+      ? LinkStatus.connected(
+          device: d,
+          transport: transport!,
+          address: address!,
+          inbound: inbound,
+          authenticated: authenticated,
+        )
+      : this;
+
+  LinkStatus withAuth(bool a) => isConnected
+      ? LinkStatus.connected(
+          device: device ?? 'Celular',
+          transport: transport!,
+          address: address!,
+          inbound: inbound,
+          authenticated: a,
+        )
       : this;
 
   @override
@@ -55,13 +94,16 @@ class LinkStatus {
       other.device == device &&
       other.transport == transport &&
       other.address == address &&
-      other.inbound == inbound;
+      other.inbound == inbound &&
+      other.authenticated == authenticated;
 
   @override
-  int get hashCode => Object.hash(phase, device, transport, address, inbound);
+  int get hashCode => Object.hash(phase, device, transport, address, inbound, authenticated);
 
   @override
-  String toString() => 'LinkStatus($phase, $device, $transport, $address${inbound ? ', entrante' : ''})';
+  String toString() =>
+      'LinkStatus($phase, $device, $transport, $address${inbound ? ', entrante' : ''}'
+      '${isConnected && !authenticated ? ', sin autenticar' : ''})';
 }
 
 /// Qué hacer con una conexión nueva cuando ya hay (o no) un enlace (CONTRACT.md §1 v2).
@@ -115,6 +157,7 @@ class _Peer {
           if (m is HelloMessage) {
             id = m.id;
             device = m.device;
+            nonce = m.nonce;
             _hello.complete();
           }
         }
@@ -131,6 +174,9 @@ class _Peer {
   DateTime lastRx;
   String? id;
   String? device;
+
+  /// Nonce del `hello` del celular (v3).
+  String? nonce;
   final _buf = StreamController<String>();
   final _hello = Completer<void>();
   final _closed = Completer<void>();
@@ -162,10 +208,19 @@ class _Peer {
 }
 
 class _Session {
-  _Session(this.peer);
+  _Session(this.peer) : nonce = LinkAuth.nonce();
   final _Peer peer;
   final done = Completer<void>();
   bool replaced = false;
+
+  /// Nonce de la tableta para esta conexión (va en su `hello`).
+  final String nonce;
+
+  /// La tableta ya validó al celular (o no exige emparejamiento).
+  bool authed = false;
+
+  /// Ya se mandó `auth` para el nonce actual del celular.
+  String? answeredNonce;
 }
 
 /// Una carrera de intentos salientes. Se le pueden sumar destinos mientras corre.
@@ -224,10 +279,13 @@ class CarLinkClient {
     this.spareGrace = const Duration(seconds: 6),
     this.netPoll = const Duration(seconds: 5),
     LinkDiagnostics? diagnostics,
+    CarTrustStore? trust,
+    this.codeTtl = LinkAuth.codeTtl,
   }) : _bridge = bridge ?? NativeBridge.instance,
        _connector = connector ?? _tcpConnector,
        _serverFactory = serverFactory ?? bindLinkServer,
-       diag = diagnostics ?? LinkDiagnostics();
+       diag = diagnostics ?? LinkDiagnostics(),
+       trust = trust ?? CarTrustStore();
 
   final NativeBridge _bridge;
   final LinkConnector _connector;
@@ -273,7 +331,25 @@ class CarLinkClient {
   /// Registro para Configuración → Diagnóstico.
   final LinkDiagnostics diag;
 
+  /// Celulares de confianza y "Requerir emparejamiento" (v3).
+  final CarTrustStore trust;
+
+  /// Validez de un código de emparejamiento.
+  final Duration codeTtl;
+
   final ValueNotifier<LinkStatus> status = ValueNotifier(LinkStatus.disconnected);
+
+  /// Seguridad de la sesión actual (v3).
+  final ValueNotifier<LinkAuthState> auth = ValueNotifier(LinkAuthState.none);
+
+  /// Código de emparejamiento que hay que mostrar (o `null`).
+  final ValueNotifier<PairingPrompt?> pairing = ValueNotifier(null);
+  Timer? _pairTimer;
+  Timer? _pairClear;
+  final _authenticated = StreamController<void>.broadcast();
+
+  /// Se emite cada vez que una sesión queda autenticada (ahí se manda `resync`/`hotspot`).
+  Stream<void> get onAuthenticated => _authenticated.stream;
   final _messages = StreamController<LinkMessage>.broadcast();
 
   /// Mensajes decodificados del celular (excepto `ping`, que se contesta aquí).
@@ -356,13 +432,20 @@ class CarLinkClient {
     _session = null;
     await s?.peer.close();
     await _bridge.releaseMulticastLock();
+    _clearPairing();
+    auth.value = LinkAuthState.none;
     status.value = LinkStatus.disconnected;
   }
 
   Future<void> dispose() async {
     await stop();
+    _pairTimer?.cancel();
+    _pairClear?.cancel();
     await _messages.close();
+    await _authenticated.close();
     status.dispose();
+    auth.dispose();
+    pairing.dispose();
     diag.dispose();
   }
 
@@ -383,15 +466,51 @@ class CarLinkClient {
     _wakeUp();
   }
 
-  /// Envía un mensaje al celular. `false` si no hay conexión.
+  /// Envía un mensaje al celular. `false` si no hay conexión o si la sesión aún no está
+  /// autenticada y el tipo no se permite antes (v3: solo `hello`/`auth`/`pair_*`/`pong`).
   Future<bool> send(Map<String, dynamic> msg) async {
-    final c = _session?.peer.conn;
-    if (c == null) return false;
-    return c.sendLine(LinkProtocol.encodeLine(msg).trimRight());
+    final s = _session;
+    if (s == null) return false;
+    if (!s.authed && !LinkProtocol.preAuthTypes.contains(msg['t'])) return false;
+    return s.peer.conn.sendLine(LinkProtocol.encodeLine(msg).trimRight());
   }
 
-  Future<bool> sendCommand(LinkAction action, {int? positionMs}) =>
-      send(LinkProtocol.cmd(action, positionMs: positionMs));
+  Future<bool> sendCommand(LinkAction action, {int? positionMs, int? queueId}) =>
+      send(LinkProtocol.cmd(action, positionMs: positionMs, queueId: queueId));
+
+  /// La sesión actual está autenticada.
+  bool get authenticated => _session?.authed ?? false;
+
+  /// Cierra el código en pantalla sin emparejar (botón "Cancelar").
+  void cancelPairing() {
+    final p = pairing.value;
+    if (p == null) return;
+    if (p.phase == PairingPhase.showing) {
+      // `busy` (no `expired`): con `expired` el celular pide otro código al instante.
+      unawaited(send(LinkProtocol.pairFail('busy')));
+      diag.note('Emparejamiento cancelado en la tableta');
+    }
+    _clearPairing();
+    final s = _session;
+    if (s != null && !s.authed) auth.value = LinkAuthState.pending;
+  }
+
+  void _clearPairing() {
+    _pairTimer?.cancel();
+    _pairTimer = null;
+    _pairClear?.cancel();
+    _pairClear = null;
+    pairing.value = null;
+  }
+
+  /// Cierra la conexión si es la del celular [id] (al "Olvidar" un celular).
+  void dropPeer(String id) {
+    final s = _session;
+    if (s != null && s.peer.id == id) {
+      diag.note('Se olvidó al celular conectado: se cierra el enlace');
+      unawaited(s.peer.close());
+    }
+  }
 
   /// Redes actuales (se refrescan solas; esto fuerza una lectura).
   Future<List<LinkNetwork>> refreshNetworks() => _refreshNetworks();
@@ -733,7 +852,16 @@ class CarLinkClient {
     final s = _session = _Session(p);
     final beacon = _beacons[p.address];
     final name = p.device ?? (p.transport == 'bt' ? (btName ?? 'Celular') : (beacon?.device ?? 'Celular'));
-    status.value = LinkStatus.connected(device: name, transport: p.transport, address: p.address, inbound: p.inbound);
+    // Sin "Requerir emparejamiento" se confía desde el principio (como v2).
+    s.authed = !trust.requirePairing;
+    auth.value = s.authed ? LinkAuthState.authenticated : LinkAuthState.pending;
+    status.value = LinkStatus.connected(
+      device: name,
+      transport: p.transport,
+      address: p.address,
+      inbound: p.inbound,
+      authenticated: s.authed,
+    );
     diag
       ..markConnected()
       ..note('Conectado (${p.inbound ? 'el celular marcó' : 'la tableta marcó'}) por ${p.transport} con ${p.address}');
@@ -752,17 +880,29 @@ class CarLinkClient {
         p.close();
       }
     });
+    void sendRaw(Map<String, dynamic> m) => conn.sendLine(LinkProtocol.encodeLine(m).trimRight());
     final sub = p.lines.listen(
       (line) {
         diag.markRx();
         final msg = LinkProtocol.decodeLine(line);
         if (msg == null) return;
+        final current = identical(_session, s);
         switch (msg) {
           case PingMessage():
-            conn.sendLine(LinkProtocol.encodeLine(LinkProtocol.pong()).trimRight());
+            sendRaw(LinkProtocol.pong());
           case HelloMessage(:final device):
-            if (identical(_session, s)) status.value = status.value.withDevice(device);
+            if (current) status.value = status.value.withDevice(device);
+            _answerAuth(s, msg);
             _messages.add(msg);
+          case AuthMessage(:final mac):
+            if (current) _checkAuth(s, mac);
+          case PairRequestMessage(:final name):
+            if (current) _onPairRequest(s, name);
+          case PairMessage(:final code, :final token):
+            if (current) _onPair(s, code, token);
+          case _ when !s.authed:
+            // v3: nada de datos de un celular sin autenticar.
+            break;
           case TrackMessage():
             diag.markTrack();
             _messages.add(msg);
@@ -778,8 +918,17 @@ class CarLinkClient {
       },
     );
 
-    await conn.sendLine(LinkProtocol.encodeLine(LinkProtocol.hello(_selfName, id: installId)).trimRight());
-    await conn.sendLine(LinkProtocol.encodeLine(LinkProtocol.resync()).trimRight());
+    await conn.sendLine(
+      LinkProtocol.encodeLine(LinkProtocol.hello(_selfName, id: installId, nonce: s.nonce)).trimRight(),
+    );
+    // El hello del celular pudo llegar antes de que esta sesión se adoptara.
+    if (p.device != null) _answerAuth(s, HelloMessage(device: p.device!, id: p.id, nonce: p.nonce));
+    if (s.authed) {
+      await conn.sendLine(LinkProtocol.encodeLine(LinkProtocol.resync()).trimRight());
+      if (!_authenticated.isClosed) _authenticated.add(null);
+    } else {
+      diag.note('Esperando que el celular se autentique (emparejamiento requerido)');
+    }
 
     await Future.any([done.future, p.closed]);
     dog.cancel();
@@ -787,6 +936,8 @@ class CarLinkClient {
     await p.close();
     if (identical(_session, s)) {
       _session = null;
+      auth.value = LinkAuthState.none;
+      if (pairing.value?.phase == PairingPhase.showing) _clearPairing();
       diag
         ..markDisconnected()
         ..note('Enlace cerrado (${p.address})');
@@ -802,6 +953,124 @@ class CarLinkClient {
       }
     }
     if (!s.done.isCompleted) s.done.complete();
+  }
+
+  // ---------------------------------------------------------------------------
+  // v3: autenticación y emparejamiento
+
+  /// Si hay token para el celular, contesta su `hello` con `auth` (una vez por nonce).
+  void _answerAuth(_Session s, HelloMessage hello) {
+    final nonce = hello.nonce, id = hello.id, me = installId;
+    if (nonce == null || id == null || me == null || s.answeredNonce == nonce) return;
+    final token = trust.tokenFor(id);
+    if (token == null) {
+      if (!s.authed) diag.note('Celular sin emparejar (${hello.device}): se espera el código');
+      return;
+    }
+    s.answeredNonce = nonce;
+    unawaited(s.peer.conn.sendLine(
+      LinkProtocol.encodeLine(LinkProtocol.auth(LinkAuth.mac(token: token, nonce: nonce, id: me))).trimRight(),
+    ));
+  }
+
+  void _checkAuth(_Session s, String mac) {
+    if (s.authed) return;
+    final id = s.peer.id;
+    final token = trust.tokenFor(id);
+    if (id == null || token == null) {
+      diag.note('El celular mandó «auth» pero no es de confianza: hay que emparejar');
+      return;
+    }
+    if (LinkAuth.sameMac(mac, LinkAuth.mac(token: token, nonce: s.nonce, id: id))) {
+      diag.note('Celular de confianza «${trust[id]?.name ?? id}» autenticado');
+      _authenticate(s);
+    } else {
+      diag.note('Autenticación inválida del celular: hay que volver a emparejar');
+    }
+  }
+
+  void _onPairRequest(_Session s, String? name) {
+    final now = DateTime.now();
+    final cur = pairing.value;
+    final phoneName = name ?? s.peer.device ?? 'Celular';
+    if (cur != null &&
+        cur.phase == PairingPhase.showing &&
+        !cur.expiredAt(now) &&
+        cur.phoneId != s.peer.id) {
+      unawaited(send(LinkProtocol.pairFail('busy')));
+      return;
+    }
+    _pairClear?.cancel();
+    _pairTimer?.cancel();
+    final prompt = PairingPrompt(
+      code: LinkAuth.pairCode(),
+      phoneName: phoneName,
+      phoneId: s.peer.id,
+      expiresAt: now.add(codeTtl),
+    );
+    pairing.value = prompt;
+    auth.value = LinkAuthState.pairing;
+    diag.note('«$phoneName» pidió emparejar: código en pantalla (${codeTtl.inSeconds} s)');
+    _pairTimer = Timer(codeTtl, () {
+      final p = pairing.value;
+      if (p == null || p.phase != PairingPhase.showing) return;
+      diag.note('El código de emparejamiento venció');
+      _finishPairing(p.copyWith(phase: PairingPhase.expired));
+      if (!s.authed && identical(_session, s)) auth.value = LinkAuthState.pending;
+    });
+    unawaited(send(LinkProtocol.pairShown()));
+  }
+
+  void _onPair(_Session s, String code, String token) {
+    final p = pairing.value;
+    if (p == null || p.phase != PairingPhase.showing) {
+      unawaited(send(LinkProtocol.pairFail('expired')));
+      return;
+    }
+    if (p.expiredAt(DateTime.now())) {
+      unawaited(send(LinkProtocol.pairFail('expired')));
+      _finishPairing(p.copyWith(phase: PairingPhase.expired));
+      return;
+    }
+    final id = s.peer.id;
+    final digits = code.replaceAll(RegExp(r'\s'), '');
+    if (digits != p.code || id == null || !LinkAuth.validToken(token)) {
+      final attempts = p.attempts + 1;
+      unawaited(send(LinkProtocol.pairFail('code')));
+      diag.note('Código de emparejamiento incorrecto ($attempts/${LinkAuth.maxAttempts})');
+      if (attempts >= LinkAuth.maxAttempts) {
+        _finishPairing(p.copyWith(attempts: attempts, phase: PairingPhase.failed));
+        if (!s.authed) auth.value = LinkAuthState.pending;
+      } else {
+        pairing.value = p.copyWith(attempts: attempts);
+      }
+      return;
+    }
+    trust.trust(id, token.toLowerCase(), p.phoneName);
+    unawaited(send(LinkProtocol.pairOk()));
+    diag.note('Emparejado con «${p.phoneName}»');
+    _finishPairing(p.copyWith(phase: PairingPhase.success));
+    _authenticate(s);
+  }
+
+  /// Deja el resultado en pantalla un momento (para la animación) y luego lo cierra.
+  void _finishPairing(PairingPrompt result) {
+    _pairTimer?.cancel();
+    pairing.value = result;
+    _pairClear?.cancel();
+    _pairClear = Timer(const Duration(milliseconds: 1800), () {
+      if (identical(pairing.value, result)) pairing.value = null;
+    });
+  }
+
+  void _authenticate(_Session s) {
+    if (s.authed) return;
+    s.authed = true;
+    if (!identical(_session, s)) return;
+    auth.value = LinkAuthState.authenticated;
+    status.value = status.value.withAuth(true);
+    unawaited(s.peer.conn.sendLine(LinkProtocol.encodeLine(LinkProtocol.resync()).trimRight()));
+    if (!_authenticated.isClosed) _authenticated.add(null);
   }
 
   /// Máximo de IPs vecinas que se prueban por intento.

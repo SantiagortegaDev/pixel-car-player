@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:pixel_car_player/car/widgets/hx.dart';
 import 'package:pixel_car_player/core/theme/app_theme.dart';
@@ -19,14 +20,20 @@ class HxControls extends StatelessWidget {
     required this.onNext,
     this.shuffle = false,
     this.repeat = false,
+    this.repeatOne = false,
+    this.liked = false,
     this.onShuffle,
     this.onRepeat,
+    this.onLike,
     this.height = 56,
     this.showShuffle = true,
     this.showPrevious = true,
     this.showPlay = true,
     this.showNext = true,
     this.showRepeat = true,
+    this.showLike = false,
+    this.pressIntensity = 1,
+    this.haptics = false,
   });
 
   final bool playing;
@@ -34,11 +41,24 @@ class HxControls extends StatelessWidget {
   final VoidCallback onPrevious;
   final VoidCallback onNext;
   final bool shuffle;
+
+  /// Repetir activo (todo o uno); [repeatOne] cambia el ícono a `repeat_one`.
   final bool repeat;
+  final bool repeatOne;
+  final bool liked;
+
+  /// `null` = deshabilitado (la app del celular no lo permite).
   final VoidCallback? onShuffle;
   final VoidCallback? onRepeat;
+  final VoidCallback? onLike;
   final double height;
-  final bool showShuffle, showPrevious, showPlay, showNext, showRepeat;
+  final bool showShuffle, showPrevious, showPlay, showNext, showRepeat, showLike;
+
+  /// Qué tanto se ensancha / redondea al presionar (0 = nada, 1 = Harmonix).
+  final double pressIntensity;
+
+  /// Vibración corta al tocar.
+  final bool haptics;
 
   /// Ancho mínimo de la fila (en múltiplos del alto) con los botones visibles.
   double get _units =>
@@ -46,9 +66,17 @@ class HxControls extends StatelessWidget {
       (showPrevious ? 1 : 0) +
       (showPlay ? 1.2 : 0) +
       (showNext ? 1 : 0) +
-      (showRepeat ? 0.9 : 0);
+      (showRepeat ? 0.9 : 0) +
+      (showLike ? 0.9 : 0);
 
-  int get _count => [showShuffle, showPrevious, showPlay, showNext, showRepeat].where((v) => v).length;
+  int get _count => [showShuffle, showPrevious, showPlay, showNext, showRepeat, showLike].where((v) => v).length;
+
+  VoidCallback? _tap(VoidCallback? f) => f == null
+      ? null
+      : () {
+          if (haptics) HapticFeedback.selectionClick();
+          f();
+        };
 
   /// Ancho máximo razonable de la fila para un alto [h] (el de play se estira hasta acá).
   static double maxWidthFor(double h) => math.max(400, h * 7.2);
@@ -71,7 +99,8 @@ class HxControls extends StatelessWidget {
               checked: shuffle,
               icon: Symbols.shuffle_rounded,
               label: 'Aleatorio',
-              onTap: onShuffle ?? () {},
+              onTap: _tap(onShuffle),
+              press: pressIntensity,
             ),
           if (showPrevious)
             _MorphButton(
@@ -81,7 +110,8 @@ class HxControls extends StatelessWidget {
               big: true,
               icon: Symbols.skip_previous_rounded,
               label: 'Anterior',
-              onTap: onPrevious,
+              onTap: _tap(onPrevious),
+              press: pressIntensity,
             ),
           if (showPlay)
             Expanded(
@@ -94,7 +124,8 @@ class HxControls extends StatelessWidget {
                   big: true,
                   icon: playing ? Symbols.pause_rounded : Symbols.play_arrow_rounded,
                   label: playing ? 'Pausar' : 'Reproducir',
-                  onTap: onToggle,
+                  onTap: _tap(onToggle),
+                  press: pressIntensity,
                 ),
               ),
             ),
@@ -106,7 +137,8 @@ class HxControls extends StatelessWidget {
               big: true,
               icon: Symbols.skip_next_rounded,
               label: 'Siguiente',
-              onTap: onNext,
+              onTap: _tap(onNext),
+              press: pressIntensity,
             ),
           if (showRepeat)
             _MorphButton(
@@ -114,9 +146,21 @@ class HxControls extends StatelessWidget {
               width: h * 0.9,
               kind: _Kind.tonal,
               checked: repeat,
-              icon: Symbols.repeat_rounded,
-              label: 'Repetir',
-              onTap: onRepeat ?? () {},
+              icon: repeatOne ? Symbols.repeat_one_rounded : Symbols.repeat_rounded,
+              label: repeatOne ? 'Repetir uno' : 'Repetir',
+              onTap: _tap(onRepeat),
+              press: pressIntensity,
+            ),
+          if (showLike)
+            _MorphButton(
+              h: h,
+              width: h * 0.9,
+              kind: _Kind.tonal,
+              checked: liked,
+              icon: Symbols.favorite_rounded,
+              label: liked ? 'Quitar me gusta' : 'Me gusta',
+              onTap: _tap(onLike),
+              press: pressIntensity,
             ),
         ];
         return SizedBox(
@@ -145,6 +189,7 @@ class _MorphButton extends StatefulWidget {
     this.width,
     this.checked = false,
     this.big = false,
+    this.press = 1,
   });
 
   final double h;
@@ -154,9 +199,14 @@ class _MorphButton extends StatefulWidget {
   final _Kind kind;
   final IconData icon;
   final String label;
-  final VoidCallback onTap;
+
+  /// `null` = deshabilitado (38 % de opacidad, sin toque).
+  final VoidCallback? onTap;
   final bool checked;
   final bool big;
+
+  /// Intensidad de la respuesta al presionar.
+  final double press;
 
   @override
   State<_MorphButton> createState() => _MorphButtonState();
@@ -173,11 +223,10 @@ class _MorphButtonState extends State<_MorphButton> {
     final (bg, fg) = play
         ? (widget.checked ? (cs.primary, cs.onPrimary) : (cs.surfaceContainerHighest, cs.onSurfaceVariant))
         : (widget.checked ? (cs.secondary, cs.onSecondary) : (cs.secondaryContainer, cs.onSecondaryContainer));
-    final radius = _pressed
-        ? HxRadius.sV
-        : widget.checked
-        ? HxRadius.mV
-        : h / 2;
+    final rest = widget.checked ? HxRadius.mV : h / 2;
+    // Con intensidad 0 no cambia; 1 = 8 px (Harmonix); 2 = casi cuadrado.
+    final pressed = (rest + (HxRadius.sV - rest) * widget.press).clamp(2.0, h / 2);
+    final radius = _pressed ? pressed : rest;
     final fill = widget.checked || play;
 
     Widget body = TweenAnimationBuilder<double>(
@@ -194,7 +243,7 @@ class _MorphButtonState extends State<_MorphButton> {
           clipBehavior: Clip.antiAlias,
           child: InkWell(
             onTap: widget.onTap,
-            onHighlightChanged: (v) => setState(() => _pressed = v),
+            onHighlightChanged: widget.onTap == null ? null : (v) => setState(() => _pressed = v),
             splashFactory: InkRipple.splashFactory,
             splashColor: fg.withValues(alpha: 0.1),
             highlightColor: fg.withValues(alpha: 0.1),
@@ -214,19 +263,24 @@ class _MorphButtonState extends State<_MorphButton> {
 
     if (widget.width != null) {
       body = TweenAnimationBuilder<double>(
-        tween: Tween(end: widget.width! + (_pressed ? 24 : 0)),
+        tween: Tween(end: widget.width! + (_pressed ? 24 * widget.press : 0)),
         duration: HxMotion.dSpringFast,
         curve: HxMotion.springFast,
         builder: (_, w, child) => SizedBox(width: w, child: child),
         child: body,
       );
     }
+    final enabled = widget.onTap != null;
     return Semantics(
       button: true,
+      enabled: enabled,
       label: widget.label,
       toggled: widget.kind == _Kind.tonal && widget.width != h ? widget.checked : null,
       excludeSemantics: true,
-      child: Tooltip(message: widget.label, child: body),
+      child: Tooltip(
+        message: enabled ? widget.label : '${widget.label} (no disponible)',
+        child: AnimatedOpacity(opacity: enabled ? 1 : 0.38, duration: HxMotion.dFxSlow, child: body),
+      ),
     );
   }
 }
